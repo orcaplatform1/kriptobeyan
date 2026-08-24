@@ -15,6 +15,7 @@ const PUBLIC_USER_SELECT = {
   fullName: true,
   phone: true,
   emailVerified: true,
+  phoneVerified: true,
   twoFactorEnabled: true,
   baseCurrency: true,
   costBasisMethod: true,

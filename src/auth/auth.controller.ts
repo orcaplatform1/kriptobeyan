@@ -10,6 +10,7 @@ import {
   ResendVerificationDto,
   VerifyEmailDto,
 } from './dto/email-verification.dto';
+import { VerifyPhoneDto } from './dto/phone-verification.dto';
 import {
   RequestPasswordResetDto,
   ResetPasswordDto,
@@ -63,6 +64,24 @@ export class AuthController {
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   resendVerification(@Body() dto: ResendVerificationDto) {
     return this.auth.resendVerificationEmail(dto.email);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('phone/verify')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  verifyPhone(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: VerifyPhoneDto,
+    @Req() req: Request,
+  ) {
+    return this.auth.verifyPhone(user.userId, dto.code, requestMeta(req));
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('phone/resend-code')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  resendPhoneCode(@CurrentUser() user: AuthenticatedUser) {
+    return this.auth.resendPhoneVerificationCode(user.userId);
   }
 
   @Post('request-password-reset')

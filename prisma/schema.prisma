@@ -63,10 +63,13 @@ model User {
   emailVerificationHash    String?
   emailVerificationExpires DateTime?
 
-  // Telefon dogrulama — SMS altyapisi henuz baglanmadi (bkz. RegisterDto
-  // yorumu), bu yuzden su an SADECE admin panelden elle isaretlenebiliyor
-  // (ör. destek uzerinden telefonla teyit edildiginde).
-  phoneVerified Boolean @default(false)
+  // Telefon dogrulama — kayit sirasinda 6 haneli kod uretilip SmsService ile
+  // gonderiliyor (SMS_PROVIDER_API_KEY bos oldugu surece sadece loglanir,
+  // bkz. sms.service.ts). Giris bu alana bakmiyor (email dogrulamayla ayni
+  // yumusak davranis) — admin panelden de elle isaretlenebilir.
+  phoneVerified             Boolean   @default(false)
+  phoneVerificationCodeHash String?
+  phoneVerificationExpires  DateTime?
 
   // Şifre sıfırlama
   passwordResetHash    String?
@@ -844,6 +847,7 @@ enum SecurityEventType {
   REFRESH_TOKEN_REUSE_DETECTED
   SUSPICIOUS_ACTIVITY
   EMAIL_VERIFIED
+  PHONE_VERIFIED
   PASSWORD_RESET_REQUESTED
   PASSWORD_RESET_COMPLETED
 }

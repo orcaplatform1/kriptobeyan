@@ -27,21 +27,18 @@ export class RegisterDto {
   @IsString()
   fullName?: string;
 
-  // Opsiyonel — SMS dogrulama altyapisi henuz baglanmadi (diger modullerdeki
-  // API anahtari bekleyen ozelliklerle ayni durum), bu yuzden email'in
-  // yerini almiyor, sadece ek bilgi olarak saklanir. Ulke kodundan SONRAKI
-  // kisim tam 10 rakam olmali (ne 9 ne 11) — bkz. AuthService.register,
-  // burada tek basina dogrulanamiyor cunku phoneCountryCode ile
-  // karsilastirma gerekiyor.
-  @IsOptional()
+  // Zorunlu — sistem erisimi icin telefon dogrulamasi kayit sirasinda
+  // baslatiliyor (bkz. AuthService.register -> sendPhoneVerificationCode).
+  // Ulke kodundan SONRAKI kisim tam 10 rakam olmali (ne 9 ne 11) — bkz.
+  // AuthService.register, burada tek basina dogrulanamiyor cunku
+  // phoneCountryCode ile karsilastirma gerekiyor.
   @IsString()
   @MaxLength(20)
-  phone?: string;
+  phone!: string;
 
-  @IsOptional()
   @IsString()
   @MaxLength(6)
-  phoneCountryCode?: string;
+  phoneCountryCode!: string;
 
   @IsString()
   @MinLength(6)

@@ -7,12 +7,13 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CryptoService } from '../crypto/crypto.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { SecurityLogService } from '../security-log/security-log.service';
 import { MailService } from '../mail/mail.service';
+import { SmsService } from '../sms/sms.service';
 import { TwoFactorService } from './two-factor.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -27,6 +28,7 @@ const EMAIL_VERIFICATION_TOKEN_BYTES = 32;
 const EMAIL_VERIFICATION_EXPIRES_HOURS = 24;
 const PASSWORD_RESET_TOKEN_BYTES = 32;
 const PASSWORD_RESET_EXPIRES_MINUTES = 30;
+const PHONE_VERIFICATION_CODE_EXPIRES_MINUTES = 10;
 const APP_URL = process.env.APP_URL ?? 'https://kriptobeyan.com';
 
 export interface RequestMeta {
@@ -52,6 +54,7 @@ export class AuthService {
     private readonly securityLog: SecurityLogService,
     private readonly twoFactor: TwoFactorService,
     private readonly mail: MailService,
+    private readonly sms: SmsService,
   ) {}
 
   async register(dto: RegisterDto, meta: RequestMeta) {
@@ -69,44 +72,47 @@ export class AuthService {
       throw new ConflictException('Bu kullanıcı adı zaten alınmış');
     }
 
-    if (dto.phone) {
-      // Ulke kodundan sonraki kisim tam 10 rakam olmali (ne 9 ne 11) —
-      // phoneCountryCode DTO'da ayrica geldigi icin burada karsilastirip
-      // dogrulayabiliyoruz (tek basina @Matches ile yapilamaz).
-      const countryCode = dto.phoneCountryCode ?? '';
-      const localNumber = dto.phone.startsWith(countryCode)
-        ? dto.phone.slice(countryCode.length)
-        : dto.phone;
-      if (!/^\d{10}$/.test(localNumber)) {
-        throw new BadRequestException(
-          'Telefon numarası ülke kodundan sonra tam 10 rakam olmalı',
-        );
-      }
+    // Ulke kodundan sonraki kisim tam 10 rakam olmali (ne 9 ne 11) —
+    // phoneCountryCode DTO'da ayrica geldigi icin burada karsilastirip
+    // dogrulayabiliyoruz (tek basina @Matches ile yapilamaz).
+    const countryCode = dto.phoneCountryCode ?? '';
+    const localNumber = dto.phone.startsWith(countryCode)
+      ? dto.phone.slice(countryCode.length)
+      : dto.phone;
+    if (!/^\d{10}$/.test(localNumber)) {
+      throw new BadRequestException(
+        'Telefon numarası ülke kodundan sonra tam 10 rakam olmalı',
+      );
+    }
 
-      const phoneTaken = await this.prisma.user.findUnique({
-        where: { phone: dto.phone },
-      });
-      if (phoneTaken) {
-        throw new ConflictException('Bu telefon numarası zaten kayıtlı');
-      }
+    const phoneTaken = await this.prisma.user.findUnique({
+      where: { phone: dto.phone },
+    });
+    if (phoneTaken) {
+      throw new ConflictException('Bu telefon numarası zaten kayıtlı');
     }
 
     const passwordHash = await argon2.hash(dto.password);
     const verificationToken = randomBytes(
       EMAIL_VERIFICATION_TOKEN_BYTES,
     ).toString('hex');
+    const phoneCode = this.generatePhoneCode();
     const user = await this.prisma.user.create({
       data: {
         email: dto.email,
         username: dto.username,
         fullName: dto.fullName,
         phone: dto.phone,
-        phoneCountryCode: dto.phone ? dto.phoneCountryCode : undefined,
+        phoneCountryCode: dto.phoneCountryCode,
         passwordHash,
         role: dto.role ?? 'INDIVIDUAL',
         emailVerificationHash: this.hashToken(verificationToken),
         emailVerificationExpires: new Date(
           Date.now() + EMAIL_VERIFICATION_EXPIRES_HOURS * 3_600_000,
+        ),
+        phoneVerificationCodeHash: this.hashToken(phoneCode),
+        phoneVerificationExpires: new Date(
+          Date.now() + PHONE_VERIFICATION_CODE_EXPIRES_MINUTES * 60_000,
         ),
       },
     });
@@ -121,6 +127,7 @@ export class AuthService {
     });
 
     await this.sendVerificationEmail(user.email, verificationToken);
+    await this.sendPhoneVerificationCode(user.phone!, phoneCode);
 
     return { id: user.id, email: user.email };
   }
@@ -172,6 +179,72 @@ export class AuthService {
       eventType: 'EMAIL_VERIFIED',
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
+    });
+  }
+
+  async verifyPhone(
+    userId: string,
+    code: string,
+    meta: RequestMeta,
+  ): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new BadRequestException('Kullanıcı bulunamadı');
+    if (user.phoneVerified) return;
+    if (
+      !user.phoneVerificationCodeHash ||
+      !user.phoneVerificationExpires ||
+      user.phoneVerificationExpires < new Date()
+    ) {
+      throw new BadRequestException('Kod geçersiz veya süresi dolmuş');
+    }
+    if (this.hashToken(code) !== user.phoneVerificationCodeHash) {
+      throw new BadRequestException('Kod hatalı');
+    }
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        phoneVerified: true,
+        phoneVerificationCodeHash: null,
+        phoneVerificationExpires: null,
+      },
+    });
+    await this.securityLog.log({
+      userId,
+      eventType: 'PHONE_VERIFIED',
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+    });
+  }
+
+  async resendPhoneVerificationCode(userId: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || user.phoneVerified || !user.phone) return;
+
+    const code = this.generatePhoneCode();
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        phoneVerificationCodeHash: this.hashToken(code),
+        phoneVerificationExpires: new Date(
+          Date.now() + PHONE_VERIFICATION_CODE_EXPIRES_MINUTES * 60_000,
+        ),
+      },
+    });
+    await this.sendPhoneVerificationCode(user.phone, code);
+  }
+
+  private generatePhoneCode(): string {
+    // 6 haneli, basi sifir olabilir (ör. "007421") — padStart ile korunuyor.
+    return randomInt(0, 1_000_000).toString().padStart(6, '0');
+  }
+
+  private async sendPhoneVerificationCode(
+    phone: string,
+    code: string,
+  ): Promise<void> {
+    await this.sms.send({
+      to: phone,
+      body: `KriptoBeyan doğrulama kodun: ${code} (10 dakika geçerli)`,
     });
   }
 

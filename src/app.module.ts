@@ -8,6 +8,7 @@ import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { CryptoModule } from './crypto/crypto.module';
 import { MailModule } from './mail/mail.module';
+import { SmsModule } from './sms/sms.module';
 import { AuditLogModule } from './audit-log/audit-log.module';
 import { SecurityLogModule } from './security-log/security-log.module';
 import { AuthModule } from './auth/auth.module';
@@ -45,6 +46,7 @@ import { CouponsModule } from './coupons/coupons.module';
     PrismaModule,
     CryptoModule,
     MailModule,
+    SmsModule,
     AuditLogModule,
     SecurityLogModule,
     AuthModule,
