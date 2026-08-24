@@ -1,7 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PriceDataService } from '../price-data/price-data.service';
-import { TransactionType, Prisma } from '../../generated/prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
+import {
+  TransactionType,
+  Prisma,
+  ReconciliationFlagType,
+} from '../../generated/prisma/client';
 import { getTurkeyYear } from '../common/turkey-date.util';
 
 // Bu asset'lerin donus degeri kabul edilir (fiat/stabil), FIFO lot olarak
@@ -76,6 +81,7 @@ export class TaxCalculationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly priceData: PriceDataService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -108,9 +114,9 @@ export class TaxCalculationService {
       if (ACQUISITION_TYPES.has(tx.type)) {
         const costBasisTotal = await this.resolveValueInTRY(tx);
         if (costBasisTotal == null) {
-          this.logger.warn(
-            `Fiyat bulunamadığı için maliyet 0 kabul edildi: tx=${tx.id} ${asset} @ ${tx.timestamp.toISOString()}`,
-          );
+          const description = `${asset} için ${tx.timestamp.toISOString()} tarihli alımın fiyat verisi bulunamadı, maliyet 0 TRY kabul edildi — bu, gerçekte olduğundan DAHA FAZLA kazanç görünmesine yol açabilir.`;
+          this.logger.warn(`Fiyat bulunamadığı için maliyet 0 kabul edildi: tx=${tx.id} ${asset} @ ${tx.timestamp.toISOString()}`);
+          await this.flagMissingData(userId, tx.id, description);
         }
         const costBasisPerUnit =
           costBasisTotal != null ? costBasisTotal / quantity : 0;
@@ -200,6 +206,12 @@ export class TaxCalculationService {
                 (yearlyLosses.get(txYear) ?? 0) + Math.abs(gainLoss),
               );
             }
+          } else {
+            const description = `${asset} için ${tx.timestamp.toISOString()} tarihli satışın fiyat verisi bulunamadığı için bu satış kazanç/kayıp hesabına HİÇ dahil edilmedi — rapor eksik olabilir.`;
+            this.logger.warn(
+              `Fiyat bulunamadığı için satış kazanç/kayıp hesabına katılmadı: tx=${tx.id} ${asset} @ ${tx.timestamp.toISOString()}`,
+            );
+            await this.flagMissingData(userId, tx.id, description);
           }
         }
       }
@@ -210,6 +222,35 @@ export class TaxCalculationService {
       loss: yearlyLosses.get(taxYear) ?? 0,
       occasionalIncome: yearlyOccasionalIncome.get(taxYear) ?? 0,
     });
+  }
+
+  /** ReconciliationFlagType.MISSING_DATA olustur — idempotent (calculateForYear
+   *  her calistiginda TUM gecmisi yeniden isler, ayni sorunu tekrar tekrar
+   *  flag'lememek icin ayni desen: bkz. TransactionAggregationService'teki
+   *  NEGATIVE_BALANCE dedup mantigi). */
+  private async flagMissingData(
+    userId: string,
+    transactionId: string,
+    description: string,
+  ) {
+    const existing = await this.prisma.reconciliationFlag.findFirst({
+      where: {
+        userId,
+        transactionId,
+        type: ReconciliationFlagType.MISSING_DATA,
+        resolved: false,
+      },
+    });
+    if (existing) return;
+    await this.prisma.reconciliationFlag.create({
+      data: {
+        userId,
+        transactionId,
+        type: ReconciliationFlagType.MISSING_DATA,
+        description,
+      },
+    });
+    await this.notifications.flagDataIssue(userId, description);
   }
 
   private async resolveValueInTRY(tx: {

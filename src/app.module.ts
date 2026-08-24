@@ -28,6 +28,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { SupportModule } from './support/support.module';
 import { CouponsModule } from './coupons/coupons.module';
 import { SiteContentModule } from './site-content/site-content.module';
+import { AiAuditModule } from './ai-audit/ai-audit.module';
 
 @Module({
   imports: [
@@ -67,6 +68,7 @@ import { SiteContentModule } from './site-content/site-content.module';
     SupportModule,
     CouponsModule,
     SiteContentModule,
+    AiAuditModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
