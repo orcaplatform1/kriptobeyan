@@ -11,43 +11,74 @@ import type {
   NormalizedExchangeTransaction,
 } from './exchange-adapter.interface';
 
-// MEXC Spot API v3, Binance'in Spot API'sinin neredeyse birebir ayni
-// yapisini kullanir (mexcdevelop.github.io/apidocs/spot_v3_en/) — ayni
-// /api/v3/... uc nokta onekleri, ayni alan isimleri (coin/insertTime/
-// applyTime/isBuyer). Tek onemli fark: API key header'i X-MBX-APIKEY degil
-// X-MEXC-APIKEY.
-const REST_BASE = 'https://api.mexc.com';
-const COMMON_QUOTES = ['USDT', 'USDC', 'BTC'];
+// Binance TR (binance.tr / eski adiyla trbinance.com), global Binance'den
+// AYRI, SPK lisansli bir tuzel kisi (BN Teknoloji A.S.) tarafindan isletilen
+// FARKLI bir platform — global Binance API anahtari burada calismaz. Ayni
+// X-MBX-APIKEY header'ini ve HMAC-SHA256 imzalama seklini kullaniyor ama uc
+// nokta onekleri tamamen farkli (/open/v1/...) ve sembol formati alt cizgili
+// (ör. BTC_TRY, global Binance'deki BTCTRY degil).
+const REST_BASE = 'https://www.binance.tr';
 
+// binance.tr, borsa ciftlerinde oncelikle TRY kotasyonunu kullanir; USDT ve
+// BTC de yaygin.
+const COMMON_QUOTES = ['TRY', 'USDT', 'BTC'];
+
+// Global Binance adaptorundeki ayni gerekce: deposit/withdraw uc noktalari
+// icin pencere siniri resmi dokumantasyonda acik degil, global Binance'deki
+// 90 gunluk siniri temkinli varsayim olarak koruyoruz.
 const MAX_WINDOW_MS = 89 * 24 * 60 * 60 * 1000;
 const DEFAULT_LOOKBACK_MS = 3 * 365 * 24 * 60 * 60 * 1000;
-const TRADE_PAGE_LIMIT = 1000;
+const TRADE_PAGE_LIMIT = 500;
 const MAX_RETRIES = 4;
 const RETRY_BASE_DELAY_MS = 5000;
 
-interface MexcDeposit {
+interface BinanceTrResponse<T> {
+  code: number;
+  msg?: string;
+  data: T;
+}
+
+interface BinanceTrAssetInfo {
+  asset: string;
+  free: string | number;
+  locked: string | number;
+}
+
+interface BinanceTrAccountInfo {
+  canTrade: number | boolean;
+  canWithdraw: number | boolean;
+  canDeposit: number | boolean;
+  accountAssets: BinanceTrAssetInfo[];
+}
+
+interface BinanceTrDeposit {
+  id: number;
+  asset: string;
   txId?: string;
-  amount: string;
-  coin: string;
+  amount: string | number;
+  status: number;
   insertTime: number;
 }
 
-interface MexcWithdrawal {
-  id: string;
+interface BinanceTrWithdrawal {
+  id: number;
+  asset: string;
   txId?: string;
-  coin: string;
-  amount: string;
-  transactionFee?: string;
-  applyTime: string;
+  amount: string | number;
+  fee?: string | number;
+  status: number;
+  createTime: number;
 }
 
-interface MexcTrade {
+interface BinanceTrTrade {
   id: number;
+  orderId: string;
+  symbol: string;
+  price: string | number;
+  qty: string | number;
+  commission?: string | number;
+  commissionAsset?: string;
   isBuyer: boolean;
-  qty: string;
-  price: string;
-  commission: string;
-  commissionAsset: string;
   time: number;
 }
 
@@ -56,34 +87,34 @@ function sleep(ms: number) {
 }
 
 /**
- * NOT: Bu adaptor MEXC'in resmi Spot API v3 dokumantasyonuna
- * (mexcdevelop.github.io/apidocs/spot_v3_en/) gore yazildi ancak gercek,
- * kimlikli bir hesaba karsi TEST EDILMEDI. Uretime almadan once gercek bir
- * hesapla dogrulanmali — ozellikle asagidaki sayfalama varsayimlari
- * (Binance ile ayni 90 gunluk pencere limiti) MEXC'in kendi
- * dokumantasyonunda ayrica teyit edilmedi, Binance-uyumlulugu varsayimina
- * dayanir.
+ * NOT: Bu adaptor binance.tr'nin yayinlanmis API dokumantasyonuna ve
+ * topluluk tarafindan yazilmis acik kaynakli bir istemciye (emin-karadag/
+ * BinanceTR) gore yazildi ancak gercek, kimlikli bir hesaba karsi TEST
+ * EDILMEDI. Ozellikle /open/v1/orders/trades uc noktasinin tam yanit
+ * alanlari (field isimleri) dogrulanmis kaynakta bulunamadi — global
+ * Binance'in myTrades sekline benzer varsayildi. Uretime almadan once
+ * gercek bir hesapla dogrulanmali.
  */
 @Injectable()
-export class MexcAdapter implements ExchangeAdapter {
-  readonly provider = ExchangeProvider.MEXC;
-  private readonly logger = new Logger(MexcAdapter.name);
+export class BinanceTrAdapter implements ExchangeAdapter {
+  readonly provider = ExchangeProvider.BINANCE_TR;
+  private readonly logger = new Logger(BinanceTrAdapter.name);
 
   async verifyPermissionLevel(
     credentials: ExchangeCredentials,
   ): Promise<ApiPermissionLevel> {
     try {
-      const res = await this.signedGet<{
-        canTrade: boolean;
-        canWithdraw: boolean;
-      }>('/api/v3/account', {}, credentials);
-
-      if (res.canWithdraw) return ApiPermissionLevel.WITHDRAW;
-      if (res.canTrade) return ApiPermissionLevel.TRADE;
+      const res = await this.signedGet<BinanceTrAccountInfo>(
+        '/open/v1/account/spot',
+        {},
+        credentials,
+      );
+      if (Number(res.canWithdraw)) return ApiPermissionLevel.WITHDRAW;
+      if (Number(res.canTrade)) return ApiPermissionLevel.TRADE;
       return ApiPermissionLevel.READ_ONLY;
     } catch (err) {
       this.logger.warn(
-        `MEXC izin dogrulama basarisiz: ${(err as Error).message}`,
+        `Binance TR izin dogrulama basarisiz: ${(err as Error).message}`,
       );
       return ApiPermissionLevel.UNKNOWN;
     }
@@ -115,27 +146,27 @@ export class MexcAdapter implements ExchangeAdapter {
 
     while (windowStart < now) {
       const windowEnd = Math.min(windowStart + MAX_WINDOW_MS, now);
-      const page = await this.signedGet<T[]>(
+      const page = await this.signedGet<{ list: T[] }>(
         path,
-        { ...extraParams, startTime: windowStart, endTime: windowEnd, limit: 1000 },
+        { ...extraParams, startTime: windowStart, endTime: windowEnd },
         credentials,
       );
-      results.push(...page);
+      results.push(...(page.list ?? []));
       windowStart = windowEnd + 1;
     }
     return results;
   }
 
   private async fetchDeposits(credentials: ExchangeCredentials, startTime: number) {
-    const rows = await this.fetchWindowed<MexcDeposit>(
-      '/api/v3/capital/deposit/hisrec',
+    const rows = await this.fetchWindowed<BinanceTrDeposit>(
+      '/open/v1/deposits',
       startTime,
       credentials,
     );
-    return rows.map((r, i): NormalizedExchangeTransaction => ({
-      externalId: `deposit-${r.txId ?? `${r.coin}-${r.insertTime}-${i}`}`,
+    return rows.map((r): NormalizedExchangeTransaction => ({
+      externalId: `deposit-${r.txId ?? r.id}`,
       type: TransactionType.DEPOSIT,
-      asset: r.coin,
+      asset: r.asset,
       quantity: String(r.amount),
       timestamp: new Date(r.insertTime),
       raw: r,
@@ -143,36 +174,40 @@ export class MexcAdapter implements ExchangeAdapter {
   }
 
   private async fetchWithdrawals(credentials: ExchangeCredentials, startTime: number) {
-    const rows = await this.fetchWindowed<MexcWithdrawal>(
-      '/api/v3/capital/withdraw/history',
+    const rows = await this.fetchWindowed<BinanceTrWithdrawal>(
+      '/open/v1/withdraws',
       startTime,
       credentials,
     );
     return rows.map((r): NormalizedExchangeTransaction => ({
       externalId: `withdrawal-${r.txId ?? r.id}`,
       type: TransactionType.WITHDRAWAL,
-      asset: r.coin,
+      asset: r.asset,
       quantity: String(r.amount),
-      feeAmount: r.transactionFee ? String(r.transactionFee) : undefined,
-      feeAsset: r.coin,
-      timestamp: new Date(r.applyTime),
+      feeAmount: r.fee !== undefined ? String(r.fee) : undefined,
+      feeAsset: r.asset,
+      timestamp: new Date(r.createTime),
       raw: r,
     }));
   }
 
   private async fetchTrades(credentials: ExchangeCredentials, startTime: number) {
-    const account = await this.signedGet<{
-      balances: { asset: string; free: string; locked: string }[];
-    }>('/api/v3/account', {}, credentials);
-    const heldAssets = account.balances
-      .filter((b) => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0)
-      .map((b) => b.asset);
+    const account = await this.signedGet<BinanceTrAccountInfo>(
+      '/open/v1/account/spot',
+      {},
+      credentials,
+    );
+    const heldAssets = (account.accountAssets ?? [])
+      .filter((a) => parseFloat(String(a.free)) > 0 || parseFloat(String(a.locked)) > 0)
+      .map((a) => a.asset);
 
     const results: NormalizedExchangeTransaction[] = [];
     for (const asset of heldAssets) {
       for (const quote of COMMON_QUOTES) {
         if (asset === quote) continue;
-        const symbol = `${asset}${quote}`;
+        // binance.tr sembol formati alt cizgili (BTC_TRY), global
+        // Binance'deki bitisik formattan (BTCTRY) farkli.
+        const symbol = `${asset}_${quote}`;
         try {
           const trades = await this.fetchTradesForSymbol(symbol, startTime, credentials);
           for (const t of trades) {
@@ -183,15 +218,15 @@ export class MexcAdapter implements ExchangeAdapter {
               quantity: String(t.qty),
               priceInQuote: String(t.price),
               quoteCurrency: quote,
-              feeAmount: String(t.commission),
+              feeAmount: t.commission !== undefined ? String(t.commission) : undefined,
               feeAsset: t.commissionAsset,
               timestamp: new Date(t.time),
               raw: t,
             });
           }
         } catch {
-          // Sembol MEXC'de gecerli degil (ör. bu asset/quote cifti hic
-          // islem gormemis) — beklenen bir durum, sessizce atla.
+          // Sembol binance.tr'de gecerli degil — beklenen bir durum,
+          // sessizce atla (bkz. Binance global adaptorundeki ayni desen).
         }
       }
     }
@@ -202,22 +237,23 @@ export class MexcAdapter implements ExchangeAdapter {
     symbol: string,
     startTime: number,
     credentials: ExchangeCredentials,
-  ): Promise<MexcTrade[]> {
-    const results: MexcTrade[] = [];
+  ): Promise<BinanceTrTrade[]> {
+    const results: BinanceTrTrade[] = [];
     let fromId: number | undefined;
 
     for (;;) {
       const params: Record<string, string | number> = fromId
         ? { symbol, fromId, limit: TRADE_PAGE_LIMIT }
         : { symbol, startTime, limit: TRADE_PAGE_LIMIT };
-      const page = await this.signedGet<MexcTrade[]>(
-        '/api/v3/myTrades',
+      const page = await this.signedGet<{ list: BinanceTrTrade[] }>(
+        '/open/v1/orders/trades',
         params,
         credentials,
       );
-      results.push(...page);
-      if (page.length < TRADE_PAGE_LIMIT) break;
-      fromId = page[page.length - 1].id + 1;
+      const rows = page.list ?? [];
+      results.push(...rows);
+      if (rows.length < TRADE_PAGE_LIMIT) break;
+      fromId = rows[rows.length - 1].id + 1;
     }
     return results;
   }
@@ -241,7 +277,7 @@ export class MexcAdapter implements ExchangeAdapter {
     query.set('signature', signature);
 
     const res = await fetch(`${REST_BASE}${path}?${query.toString()}`, {
-      headers: { 'X-MEXC-APIKEY': credentials.apiKey },
+      headers: { 'X-MBX-APIKEY': credentials.apiKey },
     });
 
     if (res.status === 429 && attempt < MAX_RETRIES) {
@@ -250,7 +286,7 @@ export class MexcAdapter implements ExchangeAdapter {
         ? Number(retryAfterHeader) * 1000
         : RETRY_BASE_DELAY_MS * 2 ** attempt;
       this.logger.warn(
-        `MEXC 429 — ${delay}ms sonra tekrar denenecek (deneme ${attempt + 1}/${MAX_RETRIES})`,
+        `Binance TR 429 — ${delay}ms sonra tekrar denenecek (deneme ${attempt + 1}/${MAX_RETRIES})`,
       );
       await sleep(delay);
       return this.signedGet<T>(path, params, credentials, attempt + 1);
@@ -258,8 +294,13 @@ export class MexcAdapter implements ExchangeAdapter {
 
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`MEXC API hatası (${path}): ${res.status} ${body}`);
+      throw new Error(`Binance TR API hatası (${path}): ${res.status} ${body}`);
     }
-    return res.json() as Promise<T>;
+
+    const parsed = (await res.json()) as BinanceTrResponse<T>;
+    if (parsed.code !== 0) {
+      throw new Error(`Binance TR API hatası (${path}): ${parsed.code} ${parsed.msg ?? ''}`);
+    }
+    return parsed.data;
   }
 }

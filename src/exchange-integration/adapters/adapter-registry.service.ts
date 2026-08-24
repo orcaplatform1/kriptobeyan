@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ExchangeProvider } from '../../../generated/prisma/client';
 import type { ExchangeAdapter } from './exchange-adapter.interface';
 import { BinanceAdapter } from './binance.adapter';
+import { BinanceTrAdapter } from './binance-tr.adapter';
 import { BybitAdapter } from './bybit.adapter';
 import { OkxAdapter } from './okx.adapter';
 import { BtcturkAdapter } from './btcturk.adapter';
@@ -24,6 +25,7 @@ export class AdapterRegistryService {
 
   constructor(
     binance: BinanceAdapter,
+    binanceTr: BinanceTrAdapter,
     bybit: BybitAdapter,
     okx: OkxAdapter,
     btcturk: BtcturkAdapter,
@@ -42,8 +44,11 @@ export class AdapterRegistryService {
   ) {
     this.adapters = new Map<ExchangeProvider, ExchangeAdapter>([
       [ExchangeProvider.BINANCE, binance],
+      [ExchangeProvider.BINANCE_TR, binanceTr],
       [ExchangeProvider.BYBIT, bybit],
+      [ExchangeProvider.BYBIT_TR, bybit],
       [ExchangeProvider.OKX, okx],
+      [ExchangeProvider.OKX_TR, okx],
       [ExchangeProvider.BTCTURK, btcturk],
       [ExchangeProvider.PARIBU, paribu],
       [ExchangeProvider.KRAKEN, kraken],

@@ -9,6 +9,7 @@ import { CsvImportService } from './csv-import.service';
 import { CsvImportController } from './csv-import.controller';
 import { AdapterRegistryService } from './adapters/adapter-registry.service';
 import { BinanceAdapter } from './adapters/binance.adapter';
+import { BinanceTrAdapter } from './adapters/binance-tr.adapter';
 import { BybitAdapter } from './adapters/bybit.adapter';
 import { OkxAdapter } from './adapters/okx.adapter';
 import { BtcturkAdapter } from './adapters/btcturk.adapter';
@@ -47,6 +48,7 @@ import { TransactionAggregationModule } from '../transaction-aggregation/transac
     SyncProcessor,
     AdapterRegistryService,
     BinanceAdapter,
+    BinanceTrAdapter,
     BybitAdapter,
     OkxAdapter,
     BtcturkAdapter,

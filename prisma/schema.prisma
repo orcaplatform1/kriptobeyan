@@ -240,6 +240,15 @@ enum ExchangeProvider {
   HTX
   MEXC
   CRYPTOCOM
+  // --- SPK lisansli yerel TR tuzel kisiler ---
+  // BINANCE_TR: gercekten ayri platform (binance.tr, farkli uc noktalar) —
+  // kendi adaptoru var. OKX_TR/BYBIT_TR: SPK uyumu icin kurulmus ayri
+  // sirketler ama teknik olarak global OKX/Bybit ile AYNI API'yi kullanirlar
+  // (ayni hesap, ayni uc nokta) — kayitta ayri secenek olarak gorunurler
+  // ama arka planda ayni adaptore yonlendirilirler (bkz. adapter-registry).
+  BINANCE_TR
+  OKX_TR
+  BYBIT_TR
 }
 
 enum ApiPermissionLevel {
