@@ -24,4 +24,10 @@ export class CreatePaymentDto {
   @IsOptional()
   @IsString()
   receiptUrl?: string;
+
+  // Bir musavirin kendi mukellefine verdigi indirim kodu — bkz.
+  // CouponsService, PaymentService.createPayment.
+  @IsOptional()
+  @IsString()
+  couponCode?: string;
 }

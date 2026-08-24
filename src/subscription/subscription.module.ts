@@ -6,9 +6,10 @@ import { SubscriptionController } from './subscription.controller';
 import { AdminPlansController } from './admin-plans.controller';
 import { AdminPaymentsController } from './admin-payments.controller';
 import { AuditLogModule } from '../audit-log/audit-log.module';
+import { CouponsModule } from '../coupons/coupons.module';
 
 @Module({
-  imports: [AuditLogModule],
+  imports: [AuditLogModule, CouponsModule],
   controllers: [
     SubscriptionController,
     AdminPlansController,

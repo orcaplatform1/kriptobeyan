@@ -105,6 +105,7 @@ export class SubscriptionController {
         cryptoProvider: dto.cryptoProvider,
         cryptoAsset: dto.cryptoAsset,
         receiptUrl: dto.receiptUrl,
+        couponCode: dto.couponCode,
       },
     );
   }

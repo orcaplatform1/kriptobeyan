@@ -132,6 +132,9 @@ model User {
   supportTickets      SupportTicket[]
   sentSupportMessages SupportMessage[]
 
+  couponCodes       CouponCode[]
+  couponRedemptions CouponRedemption[]
+
   @@map("users")
 }
 
@@ -756,8 +759,52 @@ model Payment {
   previousPlanId String?
   createdAt      DateTime        @default(now())
 
+  couponRedemption CouponRedemption?
+
   @@index([userId])
   @@map("payments")
+}
+
+// ============================================================
+// MALI MUSAVIR IS ORTAKLIGI — KUPON KODLARI
+// ============================================================
+
+// Onaylanmis (accountantVerified) her musavir kendi kodunu olusturabilir
+// (bkz. CouponsService.createMyCoupon). Musavir bu kodu kendi mukellefine
+// verir, mukellef odeme sirasinda kullanir ve indirim alir. BILEREK bu,
+// AccountantClient veri erisim izniyle ILISKILENDIRILMEZ — indirim kullanmak
+// otomatik olarak musavire mukellefin borsa/vergi verisini GORME yetkisi
+// VERMEZ, o ayri ve mukellefin acikca kabul ettigi davet akisidir (KVKK).
+// Kupon sadece indirim + admin'in musavir basina getirdigi musteri/ciro
+// istatistigini gormesi icindir.
+model CouponCode {
+  id               String   @id @default(uuid())
+  code             String   @unique
+  accountantUserId String
+  accountant       User     @relation(fields: [accountantUserId], references: [id], onDelete: Cascade)
+  discountPercent  Int
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+
+  redemptions CouponRedemption[]
+
+  @@index([accountantUserId])
+  @@map("coupon_codes")
+}
+
+model CouponRedemption {
+  id           String     @id @default(uuid())
+  couponCodeId String
+  couponCode   CouponCode @relation(fields: [couponCodeId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentId    String     @unique
+  payment      Payment    @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  discountTRY  Decimal    @db.Decimal(10, 2)
+  createdAt    DateTime   @default(now())
+
+  @@index([couponCodeId])
+  @@map("coupon_redemptions")
 }
 
 // ============================================================

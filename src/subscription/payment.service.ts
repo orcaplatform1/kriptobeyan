@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionService } from './subscription.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { CouponsService } from '../coupons/coupons.service';
 import {
   CryptoAsset,
   CryptoProvider,
@@ -44,6 +45,7 @@ export interface CreatePaymentOptions {
   cryptoProvider?: CryptoProvider;
   cryptoAsset?: CryptoAsset;
   receiptUrl?: string;
+  couponCode?: string;
 }
 
 @Injectable()
@@ -52,6 +54,7 @@ export class PaymentService {
     private readonly prisma: PrismaService,
     private readonly subscriptions: SubscriptionService,
     private readonly auditLog: AuditLogService,
+    private readonly coupons: CouponsService,
   ) {}
 
   private async fetchCryptoRateTRY(asset: CryptoAsset): Promise<number> {
@@ -135,6 +138,17 @@ export class PaymentService {
       amount = diff;
     }
 
+    // Musavir ortaklik kuponu — bkz. CouponsService. Yukseltme farkina da
+    // uygulanabilir (musteri zaten kupon sahibiyle iliskiliyse).
+    let couponId: string | undefined;
+    let couponDiscountTRY: number | undefined;
+    if (options.couponCode) {
+      const coupon = await this.coupons.validateForRedeem(options.couponCode, userId);
+      couponId = coupon.id;
+      couponDiscountTRY = Math.round(amount * (coupon.discountPercent / 100) * 100) / 100;
+      amount = Math.round((amount - couponDiscountTRY) * 100) / 100;
+    }
+
     let cryptoAmountLocked: number | undefined;
     let cryptoRateTRY: number | undefined;
 
@@ -160,6 +174,10 @@ export class PaymentService {
         previousPlanId,
       },
     });
+
+    if (couponId && couponDiscountTRY !== undefined) {
+      await this.coupons.recordRedemption(couponId, userId, payment.id, couponDiscountTRY);
+    }
 
     await this.auditLog.log({
       userId,

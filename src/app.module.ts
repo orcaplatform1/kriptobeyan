@@ -24,6 +24,7 @@ import { ReportsModule } from './reports/reports.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { SupportModule } from './support/support.module';
+import { CouponsModule } from './coupons/coupons.module';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { SupportModule } from './support/support.module';
     DashboardModule,
     AnalyticsModule,
     SupportModule,
+    CouponsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
