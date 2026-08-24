@@ -70,6 +70,19 @@ export class AuthService {
     }
 
     if (dto.phone) {
+      // Ulke kodundan sonraki kisim tam 10 rakam olmali (ne 9 ne 11) —
+      // phoneCountryCode DTO'da ayrica geldigi icin burada karsilastirip
+      // dogrulayabiliyoruz (tek basina @Matches ile yapilamaz).
+      const countryCode = dto.phoneCountryCode ?? '';
+      const localNumber = dto.phone.startsWith(countryCode)
+        ? dto.phone.slice(countryCode.length)
+        : dto.phone;
+      if (!/^\d{10}$/.test(localNumber)) {
+        throw new BadRequestException(
+          'Telefon numarası ülke kodundan sonra tam 10 rakam olmalı',
+        );
+      }
+
       const phoneTaken = await this.prisma.user.findUnique({
         where: { phone: dto.phone },
       });

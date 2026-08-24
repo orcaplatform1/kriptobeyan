@@ -16,8 +16,8 @@ export class RegisterDto {
   // Giris icin ikinci kimlik — bkz. schema.prisma User.username yorumu.
   // Sadece harf/rakam/alt cizgi, boslukla karisip giris hatasi vermesin.
   @IsString()
-  @MinLength(3)
-  @MaxLength(24)
+  @MinLength(4)
+  @MaxLength(16)
   @Matches(/^[a-zA-Z0-9_]+$/, {
     message: 'Kullanıcı adı sadece harf, rakam ve alt çizgi içerebilir',
   })
@@ -29,7 +29,10 @@ export class RegisterDto {
 
   // Opsiyonel — SMS dogrulama altyapisi henuz baglanmadi (diger modullerdeki
   // API anahtari bekleyen ozelliklerle ayni durum), bu yuzden email'in
-  // yerini almiyor, sadece ek bilgi olarak saklanir.
+  // yerini almiyor, sadece ek bilgi olarak saklanir. Ulke kodundan SONRAKI
+  // kisim tam 10 rakam olmali (ne 9 ne 11) — bkz. AuthService.register,
+  // burada tek basina dogrulanamiyor cunku phoneCountryCode ile
+  // karsilastirma gerekiyor.
   @IsOptional()
   @IsString()
   @MaxLength(20)
@@ -40,11 +43,8 @@ export class RegisterDto {
   @MaxLength(6)
   phoneCountryCode?: string;
 
-  // Gercek uygulamada @Matches ile buyuk/kucuk harf+rakam+sembol zorunlu
-  // tutulabilir; simdilik minimum uzunluk (argon2 zaten zayif parolalari
-  // brute-force'a karsi bir olcude yavaslatir, ama uzunluk ilk savunma).
   @IsString()
-  @MinLength(10)
+  @MinLength(6)
   password!: string;
 
   // Belirtilmezse INDIVIDUAL (bireysel) — bir muhasebeci daveti kabul
