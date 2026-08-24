@@ -869,3 +869,29 @@ model SecurityLog {
   @@index([ipAddress])
   @@map("security_logs")
 }
+
+// ORCA'daki (traders.tr) SiteContentSettings ile ayni desen: tek satirlik
+// singleton, admin panelden hero/footer metinlerini duzenlemek icin
+// (kullanici istegi 2026-08-24: "footer hero yazılar panelden olsun").
+// Her alanin varsayilan degeri, su an bilesenlerde SABIT yazili olan
+// metinlerin BIREBIR ayni — hic bir kayit yoksa/duzenlenmemisse gorunum
+// degismez. Sadece bu tabloya dokunur; kod deploy'u gerektirmez.
+model SiteContentSettings {
+  id String @id @default(cuid())
+
+  heroBadge           String @default("Türkiye'nin ilk kripto vergi asistanı")
+  heroTitlePrefix     String @default("Kripto kazancınız ile vergi arasındaki")
+  heroTitleHighlight  String @default("dengeyi")
+  heroTitleSuffix     String @default("biz kurarız.")
+  heroDescription     String @default("KriptoBeyan ile kripto vergi hesaplama otomatikleşir: borsa hesaplarınızı ve cüzdanlarınızı bağlayın, işlemleriniz FIFO yöntemiyle hesaplansın. Kripto beyan dönemi geldiğinde taslak raporunuz hazır olsun.")
+  heroPrimaryCtaLabel   String @default("Ücretsiz Başla")
+  heroSecondaryCtaLabel String @default("Nasıl çalışır?")
+
+  footerDescription   String  @default("Türkiye'nin kripto varlık vergi beyan asistanı.")
+  footerCopyrightText String? // bos ise bilesen "© {yil} KriptoBeyan. Tüm hakları saklıdır." hesaplar
+  footerSupportEmail  String? // bos ise SUPPORT_EMAIL sabiti kullanilir
+
+  updatedAt DateTime @updatedAt
+
+  @@map("site_content_settings")
+}
