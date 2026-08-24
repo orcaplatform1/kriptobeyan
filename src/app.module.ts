@@ -22,6 +22,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { TaxLossHarvestingModule } from './tax-loss-harvesting/tax-loss-harvesting.module';
 import { ReportsModule } from './reports/reports.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { SupportModule } from './support/support.module';
 
 @Module({
   imports: [
@@ -47,6 +49,8 @@ import { DashboardModule } from './dashboard/dashboard.module';
     TaxLossHarvestingModule,
     ReportsModule,
     DashboardModule,
+    AnalyticsModule,
+    SupportModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

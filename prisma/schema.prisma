@@ -91,6 +91,16 @@ model User {
   // Bildirim tercihleri
   declarationReminderEnabled Boolean @default(true)
 
+  // Mali musavir kimlik dogrulama — kayit HER ZAMAN acik (rol=ACCOUNTANT
+  // secip kayit olmak serbest), ama musteri davet edebilmek icin (bkz.
+  // AccountantService.inviteClient) her iki belge de yuklenmis VE admin
+  // tarafindan onaylanmis olmali. Belgeler storage/accountant-verification/
+  // altinda saklanir, sadece sahibi ve admin gorebilir.
+  accountantLicenseDocUrl   String?
+  accountantTaxPlateDocUrl  String?
+  accountantVerified        Boolean   @default(false)
+  accountantVerifiedAt      DateTime?
+
   // Admin panelindeki "aktif kullanıcılar" listesi icin — JwtAuthGuard her
   // basarili istekte gunceller (bkz. LastSeenInterceptor), gercek zamanli
   // WebSocket presence yerine bilerek basit "son N dakikada istek atti mi"
@@ -118,6 +128,9 @@ model User {
   clientOfAccountant  AccountantClient[] @relation("ClientOf")
 
   staffRecord Staff?
+
+  supportTickets      SupportTicket[]
+  sentSupportMessages SupportMessage[]
 
   @@map("users")
 }
@@ -564,6 +577,70 @@ model NotificationLog {
 
   @@index([userId])
   @@map("notification_logs")
+}
+
+// ============================================================
+// ANALYTICS (site trafigi)
+// ============================================================
+
+// Anonim ziyaretci sayaci — client tarafinda localStorage'da tutulan
+// rastgele bir visitorId, giris yapmis olsun olmasin her sayfa yuklemesinde
+// gunde bir kere upsert edilir (bkz. AnalyticsController.track). Kisisel
+// veri icermez, sadece "bugun/bu hafta/bu ay kac farkli tarayici geldi"
+// sayimini mumkun kilar.
+model VisitorLog {
+  id        String   @id @default(uuid())
+  visitorId String
+  date      String // YYYY-MM-DD (UTC)
+  createdAt DateTime @default(now())
+
+  @@unique([visitorId, date])
+  @@index([date])
+  @@map("visitor_logs")
+}
+
+// ============================================================
+// DESTEK MERKEZI
+// ============================================================
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model SupportTicket {
+  id        String              @id @default(uuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject   String
+  status    SupportTicketStatus @default(OPEN)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  messages SupportMessage[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("support_tickets")
+}
+
+model SupportMessage {
+  id           String        @id @default(uuid())
+  ticketId     String
+  ticket       SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderUserId String
+  sender       User          @relation(fields: [senderUserId], references: [id], onDelete: Cascade)
+  // Gonderen bir staff/admin mi — bilet sahibi kullaniciya göre "onlar mi
+  // biz mi yazdi" ayrimini yapabilmek icin (rol degisebilir, mesaj anindaki
+  // durumu donduruyor).
+  isFromStaff  Boolean       @default(false)
+  body         String
+  createdAt    DateTime      @default(now())
+
+  @@index([ticketId])
+  @@map("support_messages")
 }
 
 // ============================================================

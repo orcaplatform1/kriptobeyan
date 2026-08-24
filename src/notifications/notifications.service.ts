@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
-import { NotificationType } from '../../generated/prisma/client';
+import { NotificationType, UserRole } from '../../generated/prisma/client';
 
 const DECLARATION_MONTH = 3; // Mart — beyan donemi (Turkiye)
 
@@ -50,6 +50,25 @@ export class NotificationsService {
     await this.prisma.notificationLog.create({
       data: { userId, type, message },
     });
+  }
+
+  /** Admin panelinden tum kullanicilara ya da tek bir role duyuru — bkz.
+   *  AdminAnnouncementsController. */
+  async broadcast(message: string, role?: UserRole): Promise<number> {
+    const users = await this.prisma.user.findMany({
+      where: role ? { role } : {},
+      select: { id: true },
+    });
+    if (users.length === 0) return 0;
+
+    await this.prisma.notificationLog.createMany({
+      data: users.map((u) => ({
+        userId: u.id,
+        type: NotificationType.ANNOUNCEMENT,
+        message,
+      })),
+    });
+    return users.length;
   }
 
   // Gercek cron giris noktasi — sistem saatini kullanir. Test edilebilirlik

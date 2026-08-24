@@ -11,6 +11,7 @@ import type { RequestMeta } from '../auth/auth.service';
 const PUBLIC_USER_SELECT = {
   id: true,
   email: true,
+  username: true,
   fullName: true,
   phone: true,
   emailVerified: true,
@@ -21,9 +22,6 @@ const PUBLIC_USER_SELECT = {
   timezone: true,
   jurisdiction: true,
   activeTaxYear: true,
-  planType: true,
-  annualTransactionLimit: true,
-  connectedAccountLimit: true,
   declarationReminderEnabled: true,
   createdAt: true,
 } as const;

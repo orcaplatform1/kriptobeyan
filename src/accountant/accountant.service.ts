@@ -39,6 +39,16 @@ export class AccountantService {
     email: string,
     meta: RequestMeta,
   ) {
+    const accountant = await this.prisma.user.findUnique({
+      where: { id: accountantUserId },
+      select: { accountantVerified: true },
+    });
+    if (!accountant?.accountantVerified) {
+      throw new ForbiddenException(
+        'Müşteri davet edebilmek için önce müşavirlik belgeni ve vergi levhanı yükleyip admin onayı almalısın',
+      );
+    }
+
     const slot =
       await this.subscriptions.checkClientSlotAvailable(accountantUserId);
     if (!slot.allowed) {
