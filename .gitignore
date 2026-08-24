@@ -1,0 +1,19 @@
+node_modules
+/dist
+/build
+/coverage
+/generated/prisma
+
+# Keep environment variables and any local secrets out of version control
+.env
+.env.*.local
+*.pid
+
+# OS / editor
+.DS_Store
+
+# Prisma CLI'nin otomatik eklediği AI-asistan referans dosyaları (kod değil)
+/.agents
+/.claude
+/.windsurf
+skills-lock.json

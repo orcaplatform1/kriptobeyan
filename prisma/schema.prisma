@@ -1,0 +1,118 @@
+// KriptoBeyan — veri modeli.
+// Hassas alanlar (twoFactorSecret, ExchangeApiKey.encrypted*) uygulama
+// katmanında AES-256-GCM ile şifrelenmiş halde saklanır (bkz. src/crypto).
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id               String    @id @default(uuid())
+  email            String    @unique
+  passwordHash     String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Brute-force kilidi — art arda başarısız girişten sonra hesap geçici kilitlenir.
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+
+  // 2FA (TOTP) — secret AES-256-GCM ile şifreli saklanır, düz metin DEĞİL.
+  twoFactorEnabled         Boolean @default(false)
+  twoFactorSecretEncrypted String?
+
+  refreshTokens   RefreshToken[]
+  exchangeApiKeys ExchangeApiKey[]
+  auditLogs       AuditLog[]
+  securityLogs    SecurityLog[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Ham refresh token ASLA saklanmaz — sadece SHA-256 hash'i. Token
+  // kullanıcıya bir kere gösterilir, DB'de kırılsa bile işe yaramaz.
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model ExchangeApiKey {
+  id                  String    @id @default(uuid())
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exchange            String    // ör. "binance", "bybit"
+  label               String
+  // AES-256-GCM ile şifreli, format: "<iv>.<authTag>.<ciphertext>" (base64).
+  encryptedApiKey     String
+  encryptedApiSecret  String
+  // Kullanıcı, borsada bu key'e SADECE read-only izin verdiğini onayladı mı?
+  confirmedReadOnly   Boolean   @default(false)
+  confirmedReadOnlyAt DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("exchange_api_keys")
+}
+
+// Kim, ne zaman, neyi değiştirdi/erişti — normal uygulama olayları.
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String   // ör. "API_KEY_CREATED", "API_KEY_DELETED", "2FA_ENABLED"
+  entity    String?
+  entityId  String?
+  metadata  Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  ACCOUNT_LOCKED
+  TWO_FA_FAILED
+  TWO_FA_SUCCESS
+  REFRESH_TOKEN_REUSE_DETECTED
+  SUSPICIOUS_ACTIVITY
+}
+
+// Başarısız girişler, şüpheli aktivite — güvenlik odaklı, audit log'dan ayrı.
+model SecurityLog {
+  id        String            @id @default(uuid())
+  userId    String?
+  user      User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email     String?           // kullanıcı bulunamasa bile denenen e-posta
+  eventType SecurityEventType
+  ipAddress String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime          @default(now())
+
+  @@index([userId])
+  @@index([eventType])
+  @@index([ipAddress])
+  @@map("security_logs")
+}
