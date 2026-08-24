@@ -4,6 +4,9 @@ node_modules
 /coverage
 /generated/prisma
 
+# Uretilen kullanici raporlari (PDF/Excel) — kisisel veri icerir, repoya girmez
+/storage
+
 # Keep environment variables and any local secrets out of version control
 .env
 .env.*.local

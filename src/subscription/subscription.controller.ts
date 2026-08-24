@@ -1,8 +1,20 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { CurrentUser, AuthenticatedUser } from '../auth/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../auth/decorators/current-user.decorator';
 import { PlanService } from './plan.service';
 import { SubscriptionService } from './subscription.service';
 import { PaymentService } from './payment.service';
@@ -37,8 +49,17 @@ export class SubscriptionController {
   @UseGuards(JwtAuthGuard)
   @Post('payments')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  createPayment(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreatePaymentDto, @Req() req: Request) {
-    return this.payments.createPayment(user.userId, dto.planId, dto.method, requestMeta(req));
+  createPayment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreatePaymentDto,
+    @Req() req: Request,
+  ) {
+    return this.payments.createPayment(
+      user.userId,
+      dto.planId,
+      dto.method,
+      requestMeta(req),
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -54,7 +75,11 @@ export class SubscriptionController {
   @Post('payments/:id/mark-completed')
   // TODO: gercek gateway baglaninca bu admin-manuel uc nokta kaldirilip
   // webhook handler ile degistirilecek (bkz. PaymentService yorumu).
-  markCompleted(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Req() req: Request) {
+  markCompleted(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Req() req: Request,
+  ) {
     return this.payments.markCompleted(id, user.userId, requestMeta(req));
   }
 }

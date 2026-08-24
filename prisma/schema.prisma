@@ -104,6 +104,8 @@ model User {
   accountantOfClients AccountantClient[] @relation("AccountantOf")
   clientOfAccountant  AccountantClient[] @relation("ClientOf")
 
+  staffRecord Staff?
+
   @@map("users")
 }
 
@@ -153,6 +155,26 @@ model AccountantClient {
   @@index([accountantUserId])
   @@index([clientUserId])
   @@map("accountant_clients")
+}
+
+enum StaffRole {
+  ADMIN // simdilik tek rol — plan fiyat/limit duzenleme + odeme onaylama
+}
+
+// Gercek admin/staff modeli — .env'deki ADMIN_EMAILS bootstrap'inin yerini
+// alir. Staff olmak icin once normal bir User hesabi (email/parola/2FA vb.
+// AYNI guvenlik altyapisi) gerekir, sonra buraya bir kayit eklenir. Birden
+// fazla kisi odeme onaylayabilsin diye DB tablosu — redeploy gerekmeden
+// ekle/cikar (bkz. AdminGuard, scripts/promote-staff.ts).
+model Staff {
+  id        String    @id @default(uuid())
+  userId    String    @unique
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      StaffRole @default(ADMIN)
+  addedAt   DateTime  @default(now())
+  addedById String? // hangi staff ekledi (ilk kayıt için null — bkz. promote-staff script)
+
+  @@map("staff")
 }
 
 // ============================================================

@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionService } from '../subscription/subscription.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { AccountantClientStatus } from '../../generated/prisma/client';
 import type { RequestMeta } from '../auth/auth.service';
 
@@ -30,6 +31,7 @@ export class AccountantService {
     private readonly subscriptions: SubscriptionService,
     private readonly auditLog: AuditLogService,
     private readonly mail: MailService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async inviteClient(
@@ -124,13 +126,10 @@ export class AccountantService {
       },
     });
 
-    await this.prisma.notificationLog.create({
-      data: {
-        userId: invite.accountantUserId,
-        type: 'ACCOUNTANT_CLIENT_ACTIVITY',
-        message: `Davet ettiğiniz müşteri (${invite.inviteEmail}) daveti kabul etti.`,
-      },
-    });
+    await this.notifications.notifyAccountant(
+      invite.accountantUserId,
+      `Davet ettiğiniz müşteri (${invite.inviteEmail}) daveti kabul etti.`,
+    );
 
     await this.auditLog.log({
       userId: clientUserId,

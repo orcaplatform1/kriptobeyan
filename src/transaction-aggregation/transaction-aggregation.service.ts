@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SpamFilterService } from '../spam-filter/spam-filter.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   TransactionSource,
   TransactionType,
@@ -29,6 +30,7 @@ export class TransactionAggregationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly spamFilter: SpamFilterService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -202,14 +204,16 @@ export class TransactionAggregationService {
           },
         });
         if (!existing) {
+          const description = `${tx.asset} bakiyesi ${tx.timestamp.toISOString()} tarihinde negatife düşüyor — muhtemelen eksik/senkronize edilmemiş bir alım/transfer var.`;
           await this.prisma.reconciliationFlag.create({
             data: {
               userId,
               transactionId: tx.id,
               type: ReconciliationFlagType.NEGATIVE_BALANCE,
-              description: `${tx.asset} bakiyesi ${tx.timestamp.toISOString()} tarihinde negatife düşüyor — muhtemelen eksik/senkronize edilmemiş bir alım/transfer var.`,
+              description,
             },
           });
+          await this.notifications.flagDataIssue(userId, description);
         }
         // Negatif bakiyeyi 0'a sifirlayip devam ediyoruz ki tek bir eksik
         // kayit butun sonraki hesabi anlamsizca negatif gostermesin.
