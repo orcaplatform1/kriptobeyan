@@ -20,6 +20,8 @@ import { UserRole } from '../../generated/prisma/client';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCKOUT_MINUTES = 15;
+// Coklu sekme/eszamanli istek yarisi icin tolerans penceresi — bkz. refresh().
+const REUSE_GRACE_MS = 20_000;
 const REFRESH_TOKEN_BYTES = 48;
 const EMAIL_VERIFICATION_TOKEN_BYTES = 32;
 const EMAIL_VERIFICATION_EXPIRES_HOURS = 24;
@@ -60,6 +62,22 @@ export class AuthService {
       throw new ConflictException('Bu e-posta ile zaten bir hesap var');
     }
 
+    const usernameTaken = await this.prisma.user.findUnique({
+      where: { username: dto.username },
+    });
+    if (usernameTaken) {
+      throw new ConflictException('Bu kullanıcı adı zaten alınmış');
+    }
+
+    if (dto.phone) {
+      const phoneTaken = await this.prisma.user.findUnique({
+        where: { phone: dto.phone },
+      });
+      if (phoneTaken) {
+        throw new ConflictException('Bu telefon numarası zaten kayıtlı');
+      }
+    }
+
     const passwordHash = await argon2.hash(dto.password);
     const verificationToken = randomBytes(
       EMAIL_VERIFICATION_TOKEN_BYTES,
@@ -67,6 +85,10 @@ export class AuthService {
     const user = await this.prisma.user.create({
       data: {
         email: dto.email,
+        username: dto.username,
+        fullName: dto.fullName,
+        phone: dto.phone,
+        phoneCountryCode: dto.phone ? dto.phoneCountryCode : undefined,
         passwordHash,
         role: dto.role ?? 'INDIVIDUAL',
         emailVerificationHash: this.hashToken(verificationToken),
@@ -223,19 +245,32 @@ export class AuthService {
     dto: LoginDto,
     meta: RequestMeta,
   ): Promise<TokenPair | { twoFactorRequired: true }> {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+    const methodLabels: Record<LoginDto['method'], string> = {
+      username: 'Kullanıcı adı veya parola hatalı',
+      email: 'E-posta veya parola hatalı',
+      phone: 'Telefon numarası veya parola hatalı',
+    };
+    const user = await this.prisma.user.findFirst({
+      where:
+        dto.method === 'username'
+          ? { username: { equals: dto.identifier, mode: 'insensitive' } }
+          : dto.method === 'phone'
+            ? { phone: dto.identifier }
+            : { email: { equals: dto.identifier, mode: 'insensitive' } },
     });
 
     if (!user) {
       await this.securityLog.log({
-        email: dto.email,
         eventType: 'LOGIN_FAILED',
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
-        metadata: { reason: 'user_not_found' },
+        metadata: {
+          reason: 'user_not_found',
+          method: dto.method,
+          identifier: dto.identifier,
+        },
       });
-      throw new UnauthorizedException('E-posta veya parola hatalı');
+      throw new UnauthorizedException(methodLabels[dto.method]);
     }
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
@@ -254,7 +289,7 @@ export class AuthService {
     const passwordValid = await argon2.verify(user.passwordHash, dto.password);
     if (!passwordValid) {
       await this.registerFailedLogin(user.id, meta);
-      throw new UnauthorizedException('E-posta veya parola hatalı');
+      throw new UnauthorizedException(methodLabels[dto.method]);
     }
 
     if (user.failedLoginCount > 0) {
@@ -322,6 +357,41 @@ export class AuthService {
       throw new UnauthorizedException('Geçersiz refresh token');
     }
     if (stored.revokedAt) {
+      // Rotasyon YAKIN ZAMANDA olduysa (bkz. REUSE_GRACE_MS) bu genelde
+      // hirsizlik degil, ayni oturumun coklu sekme/eszamanli istekle bu
+      // token'i NEREDEYSE AYNI ANDA iki kere sunmasi — biri kazanip token'i
+      // rotate ederken digeri hala eski (artik revoke edilmis) token'i
+      // elinde tutuyor olabilir. Boyle durumda kullaniciyi TUM oturumlardan
+      // atmak yerine, o kullanicinin o an gecerli olan token'ini bulup
+      // ONUN uzerinden yeni bir cift veriyoruz (kaybeden sekme boylece
+      // sessizce "yetisiyor", kullanici oturumdan atilmiyor). Sadece
+      // rotasyondan UZUN sure sonra gelen bir tekrar (gercek calinti
+      // supheli) TUM oturumlari sonlandirir.
+      const withinGrace =
+        Date.now() - stored.revokedAt.getTime() < REUSE_GRACE_MS;
+      if (withinGrace) {
+        const current = await this.prisma.refreshToken.findFirst({
+          where: {
+            userId: stored.userId,
+            revokedAt: null,
+            expiresAt: { gt: new Date() },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (current) {
+          await this.prisma.refreshToken.update({
+            where: { id: current.id },
+            data: { revokedAt: new Date() },
+          });
+          return this.issueTokenPair(
+            stored.userId,
+            stored.user.email,
+            stored.user.role,
+            meta,
+          );
+        }
+      }
+
       await this.securityLog.log({
         userId: stored.userId,
         eventType: 'REFRESH_TOKEN_REUSE_DETECTED',

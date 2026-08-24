@@ -1,8 +1,13 @@
-import { IsEmail, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 
 export class LoginDto {
-  @IsEmail()
-  email!: string;
+  // Kullanıcı adı, email veya telefon — hangisi oldugu `method` ile belirtilir
+  // (ORCA'daki 3 yontemli giris deseni, bkz. AuthService.login).
+  @IsString()
+  identifier!: string;
+
+  @IsIn(['username', 'email', 'phone'])
+  method!: 'username' | 'email' | 'phone';
 
   @IsString()
   password!: string;

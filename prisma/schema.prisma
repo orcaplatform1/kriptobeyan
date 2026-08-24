@@ -42,14 +42,21 @@ enum CostBasisMethod {
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
+  // Giriş icin ikinci kimlik (kullanici adi) — ORCA'daki username/email/
+  // telefon uc yontemli giris deseninden alindi. Email HER ZAMAN zorunlu
+  // kalir (dogrulama/sifre sifirlama/2FA hep email'e bagli — bkz. auth
+  // servisi) — username ve telefon sadece EK giris yollari, email'in
+  // yerine gecmez.
+  username     String   @unique
   passwordHash String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   // Kişisel bilgiler
-  fullName String?
-  phone    String?
-  role     UserRole @default(INDIVIDUAL)
+  fullName        String?
+  phone           String?  @unique
+  phoneCountryCode String?
+  role            UserRole @default(INDIVIDUAL)
 
   // E-posta doğrulama
   emailVerified            Boolean   @default(false)
@@ -83,6 +90,12 @@ model User {
 
   // Bildirim tercihleri
   declarationReminderEnabled Boolean @default(true)
+
+  // Admin panelindeki "aktif kullanıcılar" listesi icin — JwtAuthGuard her
+  // basarili istekte gunceller (bkz. LastSeenInterceptor), gercek zamanli
+  // WebSocket presence yerine bilerek basit "son N dakikada istek atti mi"
+  // yaklasimi kullanildi (ORCA'daki gibi ayri bir socket.io altyapisi yok).
+  lastSeenAt DateTime?
 
   refreshTokens        RefreshToken[]
   exchangeConnections  ExchangeConnection[]
@@ -534,6 +547,10 @@ enum NotificationType {
   DATA_ISSUE
   // Muhasebeciye: musterisi yeni veri ekledi / davet kabul etti / rapor tamamladi.
   ACCOUNTANT_CLIENT_ACTIVITY
+  // Admin panelinden tum kullanicilara/role duyuru (bkz. AdminAnnouncementsController).
+  ANNOUNCEMENT
+  // Destek bileti admin tarafindan yanitlandi.
+  SUPPORT_REPLY
 }
 
 model NotificationLog {
@@ -602,31 +619,65 @@ model Subscription {
 
 enum PaymentMethod {
   CARD
+  BANK_TRANSFER
   CRYPTO
+}
+
+// Kripto odemede kullanicinin sectigi saglayici — hicbiri gercek zamanli
+// otomatik tahsilat yapmiyor (API anahtarlari baglanana kadar), sadece
+// kullaniciya dogru odeme talimatini (checkout linki VEYA cuzdan adresi)
+// gostermek icin. Onay her zaman admin'in dekont/islem kanitini inceleyip
+// markCompleted/reject cagirmasiyla olur — bkz. PaymentService yorumu.
+enum CryptoProvider {
+  BINANCE
+  BYBIT
+  OKX
+}
+
+enum CryptoAsset {
+  BTC
+  ETH
+  USDT
 }
 
 enum PaymentStatus {
   PENDING
   COMPLETED
   FAILED
+  REJECTED
 }
 
 model Payment {
-  id             String        @id @default(uuid())
+  id             String          @id @default(uuid())
   userId         String
-  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Odeme onaylanip Subscription olusturulunca doldurulur; oncesinde hangi
   // plan icin odeme yapildigini bilmek icin planId ayrica tutuluyor.
   planId         String
-  plan           Plan          @relation(fields: [planId], references: [id])
+  plan           Plan            @relation(fields: [planId], references: [id])
   subscriptionId String?
-  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
-  amount         Decimal       @db.Decimal(10, 2)
-  currency       String        @default("TRY")
+  subscription   Subscription?   @relation(fields: [subscriptionId], references: [id])
+  amount         Decimal         @db.Decimal(10, 2)
+  currency       String          @default("TRY")
   method         PaymentMethod
-  status         PaymentStatus @default(PENDING)
+  cryptoProvider CryptoProvider?
+  cryptoAsset    CryptoAsset?
+  // Odeme aninda kilitlenen kur/tutar — kullanici odeme ekranini gordukten
+  // sonra kur oynasa bile ne yatirmasi gerektigi degismesin diye.
+  cryptoAmountLocked Decimal?    @db.Decimal(20, 8)
+  cryptoRateTRY      Decimal?    @db.Decimal(20, 2)
+  // Dekont (banka havalesi) veya islem kaniti (kripto) — kullanicinin
+  // yukledigi dosyanin depolama anahtari, admin onay ekraninda gosterilir.
+  receiptUrl     String?
+  status         PaymentStatus   @default(PENDING)
   providerRef    String?
-  createdAt      DateTime      @default(now())
+  // Mevcut donem icinde ust plana gecis mi (sadece fark odendi) yoksa yeni/
+  // yenileme donemi mi baslatiyor — admin istatistiklerinde ayri gosterilir
+  // (bkz. PaymentService.createPayment otomatik yukseltme tespiti ve
+  // SubscriptionService.upgradeSubscription — bitis tarihini DEGISTIRMEZ).
+  isUpgrade      Boolean         @default(false)
+  previousPlanId String?
+  createdAt      DateTime        @default(now())
 
   @@index([userId])
   @@map("payments")

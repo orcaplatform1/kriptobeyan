@@ -57,11 +57,20 @@ export class SubscriptionService {
 
   async getUsageSummary(userId: string, role: UserRole) {
     const sub = await this.getActiveSubscription(userId);
+    const activePlan = sub
+      ? {
+          id: sub.plan.id,
+          name: sub.plan.name,
+          priceTRY: sub.plan.priceTRY.toString(),
+          type: sub.plan.type,
+        }
+      : null;
     if (role === 'ACCOUNTANT') {
       const slot = await this.checkClientSlotAvailable(userId);
       return {
         planName: sub?.plan.name ?? null,
         endDate: sub?.endDate ?? null,
+        activePlan,
         clients: slot,
       };
     }
@@ -69,6 +78,7 @@ export class SubscriptionService {
     return {
       planName: sub?.plan.name ?? null,
       endDate: sub?.endDate ?? null,
+      activePlan,
       transactions: tx,
     };
   }
@@ -81,6 +91,25 @@ export class SubscriptionService {
 
     return this.prisma.subscription.create({
       data: { userId, planId, status: 'ACTIVE', startDate: now, endDate },
+    });
+  }
+
+  /**
+   * Aynı 1 yıllık dönem içinde daha üst bir plana geçiş — SADECE fiyat farkı
+   * ödenir (bkz. PaymentService.createPayment isUpgrade hesaplaması).
+   * startDate/endDate BİLEREK değiştirilmiyor: ilk satın alınan paketin
+   * bitiş tarihi geçerli kalır, yükseltme süreyi uzatmaz/sıfırlamaz.
+   */
+  async upgradeSubscription(userId: string, planId: string) {
+    const sub = await this.getActiveSubscription(userId);
+    if (!sub) {
+      // Aktif abonelik bitmis/hic olmamis olabilir — bu durumda normal
+      // (yeni donem baslatan) aktivasyona dus.
+      return this.activateSubscription(userId, planId);
+    }
+    return this.prisma.subscription.update({
+      where: { id: sub.id },
+      data: { planId },
     });
   }
 }
