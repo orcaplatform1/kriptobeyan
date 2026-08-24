@@ -1,13 +1,25 @@
 import {
   IsBoolean,
+  IsEmail,
   IsEnum,
   IsOptional,
   IsString,
   MaxLength,
+  MinLength,
 } from 'class-validator';
 import { UserRole } from '../../../generated/prisma/client';
 
 export class AdminUpdateUserDto {
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  @MaxLength(16)
+  username?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(120)
@@ -25,6 +37,10 @@ export class AdminUpdateUserDto {
   @IsOptional()
   @IsBoolean()
   emailVerified?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  phoneVerified?: boolean;
 
   // true gonderilirse hesap kilidi (lockedUntil + failedLoginCount) temizlenir.
   @IsOptional()

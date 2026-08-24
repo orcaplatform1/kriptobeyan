@@ -63,6 +63,11 @@ model User {
   emailVerificationHash    String?
   emailVerificationExpires DateTime?
 
+  // Telefon dogrulama — SMS altyapisi henuz baglanmadi (bkz. RegisterDto
+  // yorumu), bu yuzden su an SADECE admin panelden elle isaretlenebiliyor
+  // (ör. destek uzerinden telefonla teyit edildiginde).
+  phoneVerified Boolean @default(false)
+
   // Şifre sıfırlama
   passwordResetHash    String?
   passwordResetExpires DateTime?

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -21,6 +22,7 @@ const SAFE_USER_SELECT = {
   phoneCountryCode: true,
   role: true,
   emailVerified: true,
+  phoneVerified: true,
   createdAt: true,
   lastSeenAt: true,
   lockedUntil: true,
@@ -113,13 +115,25 @@ export class AdminUsersService {
     const target = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!target) throw new NotFoundException('Kullanıcı bulunamadı');
 
+    if (dto.email && dto.email !== target.email) {
+      const taken = await this.prisma.user.findUnique({ where: { email: dto.email } });
+      if (taken) throw new ConflictException('Bu e-posta başka bir hesapta kayıtlı');
+    }
+    if (dto.username && dto.username !== target.username) {
+      const taken = await this.prisma.user.findUnique({ where: { username: dto.username } });
+      if (taken) throw new ConflictException('Bu kullanıcı adı başka bir hesapta kayıtlı');
+    }
+
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
+        email: dto.email,
+        username: dto.username,
         fullName: dto.fullName,
         phone: dto.phone,
         role: dto.role,
         emailVerified: dto.emailVerified,
+        phoneVerified: dto.phoneVerified,
         ...(dto.unlock ? { lockedUntil: null, failedLoginCount: 0 } : {}),
       },
       select: SAFE_USER_SELECT,
