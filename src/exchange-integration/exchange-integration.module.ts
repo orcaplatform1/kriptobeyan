@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
+import { BullModule } from '@nestjs/bullmq';
 import { ExchangeIntegrationService } from './exchange-integration.service';
+import { SyncProcessor } from './sync.processor';
 import { ExchangeIntegrationController } from './exchange-integration.controller';
 import { WalletAddressService } from './wallet-address.service';
 import { WalletAddressController } from './wallet-address.controller';
@@ -28,7 +30,11 @@ import { AuditLogModule } from '../audit-log/audit-log.module';
 import { TransactionAggregationModule } from '../transaction-aggregation/transaction-aggregation.module';
 
 @Module({
-  imports: [AuditLogModule, TransactionAggregationModule],
+  imports: [
+    AuditLogModule,
+    TransactionAggregationModule,
+    BullModule.registerQueue({ name: 'sync' }),
+  ],
   controllers: [
     ExchangeIntegrationController,
     WalletAddressController,
@@ -38,6 +44,7 @@ import { TransactionAggregationModule } from '../transaction-aggregation/transac
     ExchangeIntegrationService,
     WalletAddressService,
     CsvImportService,
+    SyncProcessor,
     AdapterRegistryService,
     BinanceAdapter,
     BybitAdapter,

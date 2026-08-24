@@ -14,6 +14,17 @@ import type {
 const REST_BASE = 'https://api.bybit.com';
 const RECV_WINDOW = '10000';
 
+// Bybit V5 /v5/execution/list startTime-endTime araligini EN FAZLA 7 gunle
+// sinirliyor — daha genis bir gecmis istenirse bu pencerelerle geriye dogru
+// sayfalanmali (deposit/withdraw uc noktalari daha esnek, sadece cursor
+// yeterli — bkz. fetchCursorPaginated).
+const EXECUTION_WINDOW_MS = 6 * 24 * 60 * 60 * 1000;
+const DEFAULT_LOOKBACK_MS = 3 * 365 * 24 * 60 * 60 * 1000;
+const MAX_RETRIES = 4;
+const RETRY_BASE_DELAY_MS = 5000;
+// Bybit "rate limit asildi" (retCode) — bkz. https://bybit-exchange.github.io/docs/v5/error-code
+const RATE_LIMIT_RET_CODES = new Set([10006, 10018]);
+
 interface BybitExecution {
   execId: string;
   symbol: string;
@@ -34,9 +45,15 @@ interface BybitAssetRow {
   withdrawFee?: string;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * NOT: Bybit V5 API dokumantasyonuna gore yazildi, gercek hesapla test
- * EDILMEDI (bkz. Binance adaptorundeki ayni uyari).
+ * EDILMEDI (bkz. Binance adaptorundeki ayni uyari). Sayfalama/pencere
+ * varsayimlari (execution/list icin 7 gunluk pencere, cursor tabanli
+ * sayfalama) dokumantasyona dayanir ama canli dogrulanmadi.
  */
 @Injectable()
 export class BybitAdapter implements ExchangeAdapter {
@@ -69,7 +86,7 @@ export class BybitAdapter implements ExchangeAdapter {
     credentials: ExchangeCredentials,
     since?: Date,
   ): Promise<NormalizedExchangeTransaction[]> {
-    const startTime = since?.getTime();
+    const startTime = since?.getTime() ?? Date.now() - DEFAULT_LOOKBACK_MS;
     const results: NormalizedExchangeTransaction[] = [];
     results.push(...(await this.fetchExecutions(credentials, startTime)));
     results.push(...(await this.fetchDeposits(credentials, startTime)));
@@ -77,49 +94,73 @@ export class BybitAdapter implements ExchangeAdapter {
     return results;
   }
 
-  private async fetchExecutions(
+  /** Bir sayfa isteği + donen nextPageCursor'i takip ederek TUM sayfalari
+   *  cekme yardimcisi — deposit/withdraw/execution uc noktalarinin ucunun
+   *  ortak "result: { list|rows, nextPageCursor }" seklini paylasmasindan
+   *  yararlanir. */
+  private async fetchCursorPaginated<TRow>(
+    path: string,
+    baseParams: Record<string, string | number>,
     credentials: ExchangeCredentials,
-    startTime?: number,
-  ) {
-    const params: Record<string, string | number> = {
-      category: 'spot',
-      limit: 100,
-    };
-    if (startTime) params.startTime = startTime;
-    const res = await this.signedGet<{ result: { list: BybitExecution[] } }>(
-      '/v5/execution/list',
-      params,
-      credentials,
-    );
-    return res.result.list.map((e): NormalizedExchangeTransaction => {
-      const [asset, quote] = this.splitSymbol(e.symbol);
-      return {
-        externalId: `exec-${e.execId}`,
-        type: e.side === 'Buy' ? TransactionType.BUY : TransactionType.SELL,
-        asset,
-        quantity: String(e.execQty),
-        priceInQuote: String(e.execPrice),
-        quoteCurrency: quote,
-        feeAmount: e.execFee ? String(e.execFee) : undefined,
-        feeAsset: e.feeCurrency ?? quote,
-        timestamp: new Date(Number(e.execTime)),
-        raw: e,
-      };
-    });
+    listKey: 'list' | 'rows',
+  ): Promise<TRow[]> {
+    const results: TRow[] = [];
+    let cursor: string | undefined;
+
+    for (;;) {
+      const params = cursor ? { ...baseParams, cursor } : baseParams;
+      const res = await this.signedGet<{
+        result: { nextPageCursor?: string } & Record<'list' | 'rows', TRow[]>;
+      }>(path, params, credentials);
+      const page = res.result[listKey] ?? [];
+      results.push(...page);
+      cursor = res.result.nextPageCursor;
+      if (!cursor || page.length === 0) break;
+    }
+    return results;
   }
 
-  private async fetchDeposits(
-    credentials: ExchangeCredentials,
-    startTime?: number,
-  ) {
-    const params: Record<string, string | number> = { limit: 50 };
-    if (startTime) params.startTime = startTime;
-    const res = await this.signedGet<{ result: { rows: BybitAssetRow[] } }>(
+  private async fetchExecutions(credentials: ExchangeCredentials, startTime: number) {
+    const results: NormalizedExchangeTransaction[] = [];
+    let windowStart = startTime;
+    const now = Date.now();
+
+    while (windowStart < now) {
+      const windowEnd = Math.min(windowStart + EXECUTION_WINDOW_MS, now);
+      const rows = await this.fetchCursorPaginated<BybitExecution>(
+        '/v5/execution/list',
+        { category: 'spot', startTime: windowStart, endTime: windowEnd, limit: 100 },
+        credentials,
+        'list',
+      );
+      for (const e of rows) {
+        const [asset, quote] = this.splitSymbol(e.symbol);
+        results.push({
+          externalId: `exec-${e.execId}`,
+          type: e.side === 'Buy' ? TransactionType.BUY : TransactionType.SELL,
+          asset,
+          quantity: String(e.execQty),
+          priceInQuote: String(e.execPrice),
+          quoteCurrency: quote,
+          feeAmount: e.execFee ? String(e.execFee) : undefined,
+          feeAsset: e.feeCurrency ?? quote,
+          timestamp: new Date(Number(e.execTime)),
+          raw: e,
+        });
+      }
+      windowStart = windowEnd + 1;
+    }
+    return results;
+  }
+
+  private async fetchDeposits(credentials: ExchangeCredentials, startTime: number) {
+    const rows = await this.fetchCursorPaginated<BybitAssetRow>(
       '/v5/asset/deposit/query-record',
-      params,
+      { startTime, limit: 50 },
       credentials,
+      'rows',
     );
-    return res.result.rows.map((r): NormalizedExchangeTransaction => ({
+    return rows.map((r): NormalizedExchangeTransaction => ({
       externalId: `deposit-${r.txID}`,
       type: TransactionType.DEPOSIT,
       asset: r.coin,
@@ -129,18 +170,14 @@ export class BybitAdapter implements ExchangeAdapter {
     }));
   }
 
-  private async fetchWithdrawals(
-    credentials: ExchangeCredentials,
-    startTime?: number,
-  ) {
-    const params: Record<string, string | number> = { limit: 50 };
-    if (startTime) params.startTime = startTime;
-    const res = await this.signedGet<{ result: { rows: BybitAssetRow[] } }>(
+  private async fetchWithdrawals(credentials: ExchangeCredentials, startTime: number) {
+    const rows = await this.fetchCursorPaginated<BybitAssetRow>(
       '/v5/asset/withdraw/query-record',
-      params,
+      { startTime, limit: 50 },
       credentials,
+      'rows',
     );
-    return res.result.rows.map((r): NormalizedExchangeTransaction => ({
+    return rows.map((r): NormalizedExchangeTransaction => ({
       externalId: `withdrawal-${r.txID}`,
       type: TransactionType.WITHDRAWAL,
       asset: r.coin,
@@ -168,6 +205,7 @@ export class BybitAdapter implements ExchangeAdapter {
     path: string,
     params: Record<string, string | number>,
     credentials: ExchangeCredentials,
+    attempt = 0,
   ): Promise<T> {
     const timestamp = String(Date.now());
     const query = new URLSearchParams(
@@ -192,11 +230,31 @@ export class BybitAdapter implements ExchangeAdapter {
         },
       },
     );
+
+    if (res.status === 429 && attempt < MAX_RETRIES) {
+      const delay = RETRY_BASE_DELAY_MS * 2 ** attempt;
+      this.logger.warn(
+        `Bybit 429 — ${delay}ms sonra tekrar denenecek (deneme ${attempt + 1}/${MAX_RETRIES})`,
+      );
+      await sleep(delay);
+      return this.signedGet<T>(path, params, credentials, attempt + 1);
+    }
+
     if (!res.ok) {
       const body = await res.text();
       throw new Error(`Bybit API hatası (${path}): ${res.status} ${body}`);
     }
     const json = (await res.json()) as { retCode: number; retMsg: string } & T;
+
+    if (RATE_LIMIT_RET_CODES.has(json.retCode) && attempt < MAX_RETRIES) {
+      const delay = RETRY_BASE_DELAY_MS * 2 ** attempt;
+      this.logger.warn(
+        `Bybit retCode ${json.retCode} (rate limit) — ${delay}ms sonra tekrar denenecek (deneme ${attempt + 1}/${MAX_RETRIES})`,
+      );
+      await sleep(delay);
+      return this.signedGet<T>(path, params, credentials, attempt + 1);
+    }
+
     if (json.retCode !== 0) {
       throw new Error(`Bybit API hatası (${path}): ${json.retMsg}`);
     }

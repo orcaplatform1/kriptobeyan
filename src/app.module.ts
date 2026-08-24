@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
+import { BullModule } from '@nestjs/bullmq';
 import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -32,6 +33,15 @@ import { CouponsModule } from './coupons/coupons.module';
     // kendi @Throttle() dekoratorleriyle bunu daha da siki override ediyor.
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
     ScheduleModule.forRoot(),
+    // Borsa/cuzdan senkronizasyonu icin arka plan is kuyrugu (bkz.
+    // ExchangeIntegrationModule SyncProcessor) — Redis bu sunucuda zaten
+    // calisiyor (127.0.0.1:6379), ayri bir servis kurulmadi.
+    BullModule.forRoot({
+      connection: {
+        host: process.env.REDIS_HOST ?? '127.0.0.1',
+        port: Number(process.env.REDIS_PORT ?? 6379),
+      },
+    }),
     PrismaModule,
     CryptoModule,
     MailModule,

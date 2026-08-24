@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionAggregationService } from '../transaction-aggregation/transaction-aggregation.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -11,6 +13,7 @@ import {
 } from '../../generated/prisma/client';
 import { AddWalletAddressDto } from './dto/add-wallet-address.dto';
 import type { RequestMeta } from '../auth/auth.service';
+import type { SyncJobData } from './sync.processor';
 
 const EVM_CONFIGS = {
   [WalletChain.ETHEREUM]: {
@@ -33,6 +36,7 @@ export class WalletAddressService {
     private readonly auditLog: AuditLogService,
     private readonly evmClient: EthereumLikeClient,
     private readonly btcClient: BitcoinClient,
+    @InjectQueue('sync') private readonly syncQueue: Queue<SyncJobData>,
   ) {}
 
   async add(userId: string, dto: AddWalletAddressDto, meta: RequestMeta) {
@@ -69,7 +73,9 @@ export class WalletAddressService {
     await this.prisma.walletAddress.delete({ where: { id } });
   }
 
-  async sync(userId: string, id: string): Promise<number> {
+  /** Kullanicidan gelen istek — is HEMEN kuyruga eklenir, HTTP istegi
+   *  zincirin (potansiyel olarak yavas) yanitini beklemez. */
+  async sync(userId: string, id: string): Promise<{ queued: true }> {
     const wallet = await this.prisma.walletAddress.findUnique({
       where: { id },
     });
@@ -80,6 +86,18 @@ export class WalletAddressService {
       where: { id },
       data: { syncStatus: SyncStatus.SYNCING },
     });
+    await this.syncQueue.add('wallet-sync', { kind: 'wallet', userId, id });
+    return { queued: true };
+  }
+
+  /** Gercek senkronizasyon islemi — sadece SyncProcessor'dan cagrilir. */
+  async performSync(userId: string, id: string): Promise<number> {
+    const wallet = await this.prisma.walletAddress.findUnique({
+      where: { id },
+    });
+    if (!wallet || wallet.userId !== userId)
+      throw new NotFoundException('Cüzdan bulunamadı');
+
     try {
       const since = wallet.lastSyncedAt ?? undefined;
       const items =

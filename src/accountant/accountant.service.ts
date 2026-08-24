@@ -14,8 +14,18 @@ import { AccountantClientStatus } from '../../generated/prisma/client';
 import type { RequestMeta } from '../auth/auth.service';
 
 const INVITE_TOKEN_BYTES = 32;
-const INVITE_EXPIRES_DAYS = 14;
+const INVITE_EXPIRES_HOURS = 48;
 const APP_URL = process.env.APP_URL ?? 'https://kriptobeyan.com';
+
+// Kabul edilmemis (PENDING) davetlerde mukellefin e-postasi/adi musavir
+// tarafinda maskelenir — "cift tarafli onay" ruhuna uygun: mukellef acikca
+// izin verene kadar musavir kimlik bilgisini bile tam gorememeli.
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!domain) return '***';
+  const visible = local.slice(0, 1);
+  return `${visible}${'*'.repeat(Math.max(3, local.length - 1))}@${domain}`;
+}
 
 /**
  * KVKK/güvenlik gereği: bu servis hiçbir yerde ExchangeConnection veya
@@ -79,7 +89,7 @@ export class AccountantService {
         inviteEmail: email,
         inviteTokenHash: this.hashToken(token),
         inviteExpiresAt: new Date(
-          Date.now() + INVITE_EXPIRES_DAYS * 86_400_000,
+          Date.now() + INVITE_EXPIRES_HOURS * 3_600_000,
         ),
         status: AccountantClientStatus.PENDING,
       },
@@ -91,7 +101,7 @@ export class AccountantService {
       html:
         `Mali müşaviriniz sizi KriptoBeyan'a davet etti. Hesabınız yoksa önce kayıt olun, ` +
         `ardından daveti kabul etmek için: <a href="${APP_URL}/muhasebeci-daveti?token=${token}">buraya tıklayın</a> ` +
-        `(${INVITE_EXPIRES_DAYS} gün geçerli). Mali müşaviriniz borsa API key'lerinizi ASLA göremez — sadece ` +
+        `(${INVITE_EXPIRES_HOURS} saat geçerli). Mali müşaviriniz borsa API key'lerinizi ASLA göremez — sadece ` +
         `hesapladığınız vergi özetine erişir.`,
     });
 
@@ -171,7 +181,20 @@ export class AccountantService {
       },
       orderBy: { invitedAt: 'desc' },
     });
-    return clients;
+
+    // PENDING davette mukellef henuz izin vermedi — kimlik bilgisi
+    // maskelenir (bkz. dosya basindaki yorum).
+    return clients.map((c) =>
+      c.status === AccountantClientStatus.PENDING
+        ? {
+            ...c,
+            inviteEmail: maskEmail(c.inviteEmail),
+            client: c.client
+              ? { ...c.client, email: maskEmail(c.client.email), fullName: null }
+              : c.client,
+          }
+        : c,
+    );
   }
 
   /** Tum musterilerin ozet durumu tek tabloda — bkz. "toplu gorunum" istegi. */

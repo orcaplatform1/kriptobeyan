@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { CryptoService } from '../crypto/crypto.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -7,6 +9,7 @@ import { AdapterRegistryService } from './adapters/adapter-registry.service';
 import { CreateExchangeConnectionDto } from './dto/create-exchange-connection.dto';
 import { SyncStatus, TransactionSource } from '../../generated/prisma/client';
 import type { RequestMeta } from '../auth/auth.service';
+import type { SyncJobData } from './sync.processor';
 
 @Injectable()
 export class ExchangeIntegrationService {
@@ -16,6 +19,7 @@ export class ExchangeIntegrationService {
     private readonly auditLog: AuditLogService,
     private readonly aggregation: TransactionAggregationService,
     private readonly adapters: AdapterRegistryService,
+    @InjectQueue('sync') private readonly syncQueue: Queue<SyncJobData>,
   ) {}
 
   async create(
@@ -73,7 +77,22 @@ export class ExchangeIntegrationService {
     return this.toSafeShape(updated);
   }
 
-  async sync(userId: string, id: string): Promise<number> {
+  /** Kullanicidan gelen istek — is HEMEN kuyruga eklenir, HTTP istegi
+   *  borsanin (potansiyel olarak yavas/sayfali) yanitini beklemez. Gercek
+   *  is SyncProcessor.process() icinde performSync() cagrisiyla yapilir. */
+  async sync(userId: string, id: string): Promise<{ queued: true }> {
+    await this.getOwned(userId, id);
+    await this.prisma.exchangeConnection.update({
+      where: { id },
+      data: { syncStatus: SyncStatus.SYNCING },
+    });
+    await this.syncQueue.add('exchange-sync', { kind: 'exchange', userId, id });
+    return { queued: true };
+  }
+
+  /** Gercek senkronizasyon islemi — sadece SyncProcessor'dan (arka plan
+   *  worker'i) cagrilir, HTTP request-response dongusunun disinda calisir. */
+  async performSync(userId: string, id: string): Promise<number> {
     const connection = await this.getOwned(userId, id);
     const adapter = this.adapters.get(connection.provider);
     const credentials = {
@@ -84,10 +103,6 @@ export class ExchangeIntegrationService {
         : undefined,
     };
 
-    await this.prisma.exchangeConnection.update({
-      where: { id },
-      data: { syncStatus: SyncStatus.SYNCING },
-    });
     try {
       const items = await adapter.fetchTransactions(
         credentials,

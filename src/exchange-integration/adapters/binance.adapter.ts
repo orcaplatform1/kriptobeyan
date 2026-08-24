@@ -16,6 +16,17 @@ const REST_BASE = 'https://api.binance.com';
 // "tum spot islemleri" diye tek bir uc noktasi yok (bkz. arayuz yorumu).
 const COMMON_QUOTES = ['USDT', 'TRY', 'BUSD', 'BTC', 'FDUSD'];
 
+// Binance deposit/withdraw history uc noktalari startTime/endTime arasini
+// EN FAZLA 90 gune izin veriyor — daha eski veri istenirse bu pencereler
+// halinde geriye dogru sayfalanmali (bkz. fetchWindowed).
+const MAX_WINDOW_MS = 89 * 24 * 60 * 60 * 1000;
+// Ilk baglantida "since" verilmezse ne kadar geriye gidilecek — 3 yil,
+// coğu kullanicinin tum gecmisini kapsar.
+const DEFAULT_LOOKBACK_MS = 3 * 365 * 24 * 60 * 60 * 1000;
+const TRADE_PAGE_LIMIT = 1000;
+const MAX_RETRIES = 4;
+const RETRY_BASE_DELAY_MS = 5000;
+
 interface BinanceDeposit {
   txId?: string;
   id: string;
@@ -33,7 +44,7 @@ interface BinanceWithdrawal {
 }
 
 interface BinanceTrade {
-  id: string;
+  id: number;
   isBuyer: boolean;
   qty: string;
   price: string;
@@ -42,10 +53,17 @@ interface BinanceTrade {
   time: number;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * NOT: Bu adaptor Binance'in resmi REST API dokumantasyonuna gore yazildi
  * ancak gercek, kimlikli bir hesaba karsi TEST EDILMEDI (bu ortamda test
- * API key'i yok). Uretime almadan once gercek bir hesapla dogrulanmali.
+ * API key'i yok). Uretime almadan once gercek bir hesapla dogrulanmali —
+ * ozellikle asagidaki sayfalama varsayimlari (90 gunluk pencere limiti,
+ * trade sayfalamada fromId kullanimi) Binance dokumantasyonuna dayanir ama
+ * canli dogrulanmadi.
  */
 @Injectable()
 export class BinanceAdapter implements ExchangeAdapter {
@@ -78,7 +96,7 @@ export class BinanceAdapter implements ExchangeAdapter {
     credentials: ExchangeCredentials,
     since?: Date,
   ): Promise<NormalizedExchangeTransaction[]> {
-    const startTime = since?.getTime();
+    const startTime = since?.getTime() ?? Date.now() - DEFAULT_LOOKBACK_MS;
     const results: NormalizedExchangeTransaction[] = [];
 
     results.push(...(await this.fetchDeposits(credentials, startTime)));
@@ -88,13 +106,35 @@ export class BinanceAdapter implements ExchangeAdapter {
     return results;
   }
 
-  private async fetchDeposits(
+  /** deposit/withdraw uc noktalari icin 90 gunluk pencerelerle geriye
+   *  dogru sayfalama — bkz. MAX_WINDOW_MS yorumu. */
+  private async fetchWindowed<T>(
+    path: string,
+    startTime: number,
     credentials: ExchangeCredentials,
-    startTime?: number,
-  ) {
-    const rows = await this.signedGet<BinanceDeposit[]>(
+    extraParams: Record<string, string | number> = {},
+  ): Promise<T[]> {
+    const results: T[] = [];
+    let windowStart = startTime;
+    const now = Date.now();
+
+    while (windowStart < now) {
+      const windowEnd = Math.min(windowStart + MAX_WINDOW_MS, now);
+      const page = await this.signedGet<T[]>(
+        path,
+        { ...extraParams, startTime: windowStart, endTime: windowEnd, limit: 1000 },
+        credentials,
+      );
+      results.push(...page);
+      windowStart = windowEnd + 1;
+    }
+    return results;
+  }
+
+  private async fetchDeposits(credentials: ExchangeCredentials, startTime: number) {
+    const rows = await this.fetchWindowed<BinanceDeposit>(
       '/sapi/v1/capital/deposit/hisrec',
-      startTime ? { startTime } : {},
+      startTime,
       credentials,
     );
     return rows.map((r): NormalizedExchangeTransaction => ({
@@ -107,13 +147,10 @@ export class BinanceAdapter implements ExchangeAdapter {
     }));
   }
 
-  private async fetchWithdrawals(
-    credentials: ExchangeCredentials,
-    startTime?: number,
-  ) {
-    const rows = await this.signedGet<BinanceWithdrawal[]>(
+  private async fetchWithdrawals(credentials: ExchangeCredentials, startTime: number) {
+    const rows = await this.fetchWindowed<BinanceWithdrawal>(
       '/sapi/v1/capital/withdraw/history',
-      startTime ? { startTime } : {},
+      startTime,
       credentials,
     );
     return rows.map((r): NormalizedExchangeTransaction => ({
@@ -128,10 +165,7 @@ export class BinanceAdapter implements ExchangeAdapter {
     }));
   }
 
-  private async fetchTrades(
-    credentials: ExchangeCredentials,
-    startTime?: number,
-  ) {
+  private async fetchTrades(credentials: ExchangeCredentials, startTime: number) {
     const account = await this.signedGet<{
       balances: { asset: string; free: string; locked: string }[];
     }>('/api/v3/account', {}, credentials);
@@ -145,13 +179,7 @@ export class BinanceAdapter implements ExchangeAdapter {
         if (asset === quote) continue;
         const symbol = `${asset}${quote}`;
         try {
-          const trades = await this.signedGet<BinanceTrade[]>(
-            '/api/v3/myTrades',
-            startTime
-              ? { symbol, startTime, limit: 1000 }
-              : { symbol, limit: 1000 },
-            credentials,
-          );
+          const trades = await this.fetchTradesForSymbol(symbol, startTime, credentials);
           for (const t of trades) {
             results.push({
               externalId: `trade-${t.id}`,
@@ -175,10 +203,38 @@ export class BinanceAdapter implements ExchangeAdapter {
     return results;
   }
 
+  /** Binance'de startTime + fromId birlikte kullanilamaz — ilk sayfa
+   *  startTime ile, sonraki sayfalar donen son trade'in id+1'i (fromId)
+   *  ile cekilir. 1000'den az trade donerse son sayfaya varilmis demektir. */
+  private async fetchTradesForSymbol(
+    symbol: string,
+    startTime: number,
+    credentials: ExchangeCredentials,
+  ): Promise<BinanceTrade[]> {
+    const results: BinanceTrade[] = [];
+    let fromId: number | undefined;
+
+    for (;;) {
+      const params: Record<string, string | number> = fromId
+        ? { symbol, fromId, limit: TRADE_PAGE_LIMIT }
+        : { symbol, startTime, limit: TRADE_PAGE_LIMIT };
+      const page = await this.signedGet<BinanceTrade[]>(
+        '/api/v3/myTrades',
+        params,
+        credentials,
+      );
+      results.push(...page);
+      if (page.length < TRADE_PAGE_LIMIT) break;
+      fromId = page[page.length - 1].id + 1;
+    }
+    return results;
+  }
+
   private async signedGet<T>(
     path: string,
     params: Record<string, string | number>,
     credentials: ExchangeCredentials,
+    attempt = 0,
   ): Promise<T> {
     const query = new URLSearchParams({
       ...Object.fromEntries(
@@ -195,6 +251,21 @@ export class BinanceAdapter implements ExchangeAdapter {
     const res = await fetch(`${REST_BASE}${path}?${query.toString()}`, {
       headers: { 'X-MBX-APIKEY': credentials.apiKey },
     });
+
+    // 429 = rate limit asildi, 418 = Binance IP'yi gecici banladi — ikisinde
+    // de exponential backoff ile yeniden dene (Retry-After varsa onu esas al).
+    if ((res.status === 429 || res.status === 418) && attempt < MAX_RETRIES) {
+      const retryAfterHeader = res.headers.get('Retry-After');
+      const delay = retryAfterHeader
+        ? Number(retryAfterHeader) * 1000
+        : RETRY_BASE_DELAY_MS * 2 ** attempt;
+      this.logger.warn(
+        `Binance ${res.status} — ${delay}ms sonra tekrar denenecek (deneme ${attempt + 1}/${MAX_RETRIES})`,
+      );
+      await sleep(delay);
+      return this.signedGet<T>(path, params, credentials, attempt + 1);
+    }
+
     if (!res.ok) {
       const body = await res.text();
       throw new Error(`Binance API hatası (${path}): ${res.status} ${body}`);
