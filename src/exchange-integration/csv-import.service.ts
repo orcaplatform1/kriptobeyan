@@ -17,6 +17,11 @@ import type { RequestMeta } from '../auth/auth.service';
 //
 // date, type, asset, quantity, price, quoteCurrency, feeAmount, feeAsset
 // 2025-03-15T10:00:00Z, BUY, BTC, 0.01, 1850000, TRY, 5, TRY
+//
+// DeFi/on-chain kazançlar (staking, airdrop, madencilik, likidite havuzu
+// ödülü) STAKING_REWARD / AIRDROP / MINING_REWARD / LP_REWARD tipleriyle
+// yüklenir — bunlar TaxCalculationService'te deger artis kazancindan
+// (capital gains) AYRI, "arizi kazanc" olarak biriktirilir.
 const REQUIRED_COLUMNS = ['date', 'type', 'asset', 'quantity'];
 const VALID_TYPES = new Set(Object.values(TransactionType));
 

@@ -228,7 +228,7 @@ export class ReportsService {
         ],
         ['Net sermaye kazancı', `${summary.netCapitalGainTRY.toString()} TRY`],
         [
-          'Arızi kazanç (staking/airdrop/mining)',
+          'Arızi kazanç (staking/airdrop/mining/LP)',
           `${summary.occasionalIncomeTRY.toString()} TRY`,
         ],
         [
@@ -310,7 +310,7 @@ export class ReportsService {
         summary.totalRealizedLossTRY.toString(),
       ],
       ['Net sermaye kazancı (TRY)', summary.netCapitalGainTRY.toString()],
-      ['Arızi kazanç (TRY)', summary.occasionalIncomeTRY.toString()],
+      ['Arızi kazanç — staking/airdrop/mining/LP (TRY)', summary.occasionalIncomeTRY.toString()],
       [
         'Kullanılan istisna — sermaye kazancı (TRY)',
         summary.capitalGainsExemptionUsedTRY.toString(),

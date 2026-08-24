@@ -354,6 +354,7 @@ enum TransactionType {
   STAKING_REWARD
   AIRDROP
   MINING_REWARD
+  LP_REWARD
   FEE
   SWAP
 }

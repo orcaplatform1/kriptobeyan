@@ -189,6 +189,7 @@ export class TransactionAggregationService {
         TransactionType.STAKING_REWARD,
         TransactionType.AIRDROP,
         TransactionType.MINING_REWARD,
+        TransactionType.LP_REWARD,
       ];
       const isInflow = inflowTypes.includes(tx.type);
       const next = isInflow ? current + qty : current - qty;

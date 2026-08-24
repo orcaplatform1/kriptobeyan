@@ -15,6 +15,7 @@ const ACQUISITION_TYPES = new Set<TransactionType>([
   TransactionType.STAKING_REWARD,
   TransactionType.AIRDROP,
   TransactionType.MINING_REWARD,
+  TransactionType.LP_REWARD,
 ]);
 
 // SADECE bunlar gercek "elden cikarma" (taxable disposal) sayilir.
@@ -31,10 +32,14 @@ const SILENT_CONSUMPTION_TYPES = new Set<TransactionType>([
   TransactionType.FEE,
 ]);
 
+// Arizi kazanc (staking/airdrop/madencilik/likidite havuzu odulu) — Gelir
+// Vergisi Kanunu'nun arizi kazanc istisnasina tabi, deger artis kazancindan
+// (capital gains) AYRI islenir/istisna edilir, bkz. persistSummary.
 const OCCASIONAL_INCOME_TYPES = new Set<TransactionType>([
   TransactionType.STAKING_REWARD,
   TransactionType.AIRDROP,
   TransactionType.MINING_REWARD,
+  TransactionType.LP_REWARD,
 ]);
 
 interface WorkingLot {
