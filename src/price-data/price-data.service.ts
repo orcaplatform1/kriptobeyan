@@ -3,10 +3,21 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CoingeckoClient } from './coingecko.client';
 import { TcmbClient } from './tcmb.client';
 import { PriceSource } from '../../generated/prisma/client';
+import { toTurkeyDate } from '../common/turkey-date.util';
 
+// Borsalardan gelen ham zaman damgalari UTC'dir; fiyat/kur onbellegi ve
+// CoinGecko gunluk fiyat sorgusu TURKIYE takvim gunune gore anahtarlanmali
+// (TSI = UTC+3, DST yok) — aksi halde ör. 22:00-23:59 UTC'deki bir islem
+// (Turkiye'de zaten ertesi gunun 01:00-02:59'u) bir onceki gunun fiyatiyla
+// eslesir (bkz. TcmbClient.getRate'deki ayni duzeltme).
 function toDateOnly(date: Date): Date {
+  const turkeyDate = toTurkeyDate(date);
   return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    Date.UTC(
+      turkeyDate.getUTCFullYear(),
+      turkeyDate.getUTCMonth(),
+      turkeyDate.getUTCDate(),
+    ),
   );
 }
 

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PriceDataService } from '../price-data/price-data.service';
 import { TransactionType, Prisma } from '../../generated/prisma/client';
+import { getTurkeyYear } from '../common/turkey-date.util';
 
 // Bu asset'lerin donus degeri kabul edilir (fiat/stabil), FIFO lot olarak
 // izlenmez — sadece TRY donusumu icin kullanilir.
@@ -96,7 +97,7 @@ export class TaxCalculationService {
     for (const tx of transactions) {
       const asset = tx.asset.toUpperCase();
       if (FIAT_LIKE.has(asset)) continue;
-      const txYear = tx.timestamp.getUTCFullYear();
+      const txYear = getTurkeyYear(tx.timestamp);
       const quantity = tx.quantity.toNumber();
 
       if (ACQUISITION_TYPES.has(tx.type)) {

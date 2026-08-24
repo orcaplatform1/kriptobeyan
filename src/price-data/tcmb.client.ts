@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { XMLParser } from 'fast-xml-parser';
+import { toTurkeyDate } from '../common/turkey-date.util';
 
 interface TcmbCurrencyRow {
   '@_CurrencyCode': string;
@@ -21,10 +22,20 @@ export class TcmbClient {
     attributeNamePrefix: '@_',
   });
 
-  /** currencyCode ör. "USD" — TRY karşılığı döner (ForexBuying). */
+  /** currencyCode ör. "USD" — TRY karşılığı döner (ForexBuying).
+   *
+   *  ONEMLI: `date` genelde bir islemin HAM UTC zaman damgasi (Binance/Bybit
+   *  vb. borsalar UTC doner). TCMB kurunu Turkiye'nin kendi takvim gunune
+   *  gore yayinlar (TSI = UTC+3, DST yok, 2016'dan beri sabit) — ornegin
+   *  2025-06-14T22:30:00Z aslinda Turkiye'de 2025-06-15 01:30, yani bir
+   *  SONRAKI gunun kuru kullanilmali, ayni UTC-gununkü degil. Bu yuzden
+   *  asagida once +3 saat kaydirip Turkiye takvim gununu buluyoruz, ancak
+   *  SONRA fallback (onceki is gunu) mantigi bu kaydirilmis tarih uzerinden
+   *  ilerliyor. */
   async getRate(currencyCode: string, date: Date): Promise<number | null> {
+    const turkeyDate = toTurkeyDate(date);
     for (let attempt = 0; attempt < 5; attempt++) {
-      const d = new Date(date);
+      const d = new Date(turkeyDate);
       d.setUTCDate(d.getUTCDate() - attempt);
       const rate = await this.fetchRateForDate(currencyCode, d);
       if (rate != null) return rate;
