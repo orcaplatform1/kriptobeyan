@@ -1,4 +1,11 @@
-import { IsEmail, IsString, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsEnum,
+  IsOptional,
+  IsString,
+  MinLength,
+} from 'class-validator';
+import { UserRole } from '../../../generated/prisma/client';
 
 export class RegisterDto {
   @IsEmail()
@@ -10,4 +17,11 @@ export class RegisterDto {
   @IsString()
   @MinLength(10)
   password!: string;
+
+  // Belirtilmezse INDIVIDUAL (bireysel) — bir muhasebeci daveti kabul
+  // ederken de bu yol kullanılır ama rol her zaman INDIVIDUAL kalır (davet
+  // eden zaten ACCOUNTANT'tır, müşteri değil).
+  @IsOptional()
+  @IsEnum(UserRole)
+  role?: UserRole;
 }

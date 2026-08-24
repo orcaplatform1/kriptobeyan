@@ -5,10 +5,18 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { CryptoModule } from './crypto/crypto.module';
+import { MailModule } from './mail/mail.module';
 import { AuditLogModule } from './audit-log/audit-log.module';
 import { SecurityLogModule } from './security-log/security-log.module';
 import { AuthModule } from './auth/auth.module';
-import { ExchangeApiKeysModule } from './exchange-api-keys/exchange-api-keys.module';
+import { UserModule } from './user/user.module';
+import { ExchangeIntegrationModule } from './exchange-integration/exchange-integration.module';
+import { TransactionAggregationModule } from './transaction-aggregation/transaction-aggregation.module';
+import { PriceDataModule } from './price-data/price-data.module';
+import { TaxCalculationModule } from './tax-calculation/tax-calculation.module';
+import { SpamFilterModule } from './spam-filter/spam-filter.module';
+import { SubscriptionModule } from './subscription/subscription.module';
+import { AccountantModule } from './accountant/accountant.module';
 
 @Module({
   imports: [
@@ -17,10 +25,18 @@ import { ExchangeApiKeysModule } from './exchange-api-keys/exchange-api-keys.mod
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
     PrismaModule,
     CryptoModule,
+    MailModule,
     AuditLogModule,
     SecurityLogModule,
     AuthModule,
-    ExchangeApiKeysModule,
+    UserModule,
+    ExchangeIntegrationModule,
+    TransactionAggregationModule,
+    PriceDataModule,
+    TaxCalculationModule,
+    SpamFilterModule,
+    SubscriptionModule,
+    AccountantModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

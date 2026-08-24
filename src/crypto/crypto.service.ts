@@ -26,13 +26,18 @@ export class CryptoService implements OnModuleInit {
       );
     }
     this.key = Buffer.from(hexKey, 'hex');
-    this.logger.log('Encryption key yuklendi (process env, .env dosyasindan degil)');
+    this.logger.log(
+      'Encryption key yuklendi (process env, .env dosyasindan degil)',
+    );
   }
 
   encrypt(plaintext: string): string {
     const iv = randomBytes(IV_LENGTH);
     const cipher = createCipheriv(ALGORITHM, this.key, iv);
-    const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+    const ciphertext = Buffer.concat([
+      cipher.update(plaintext, 'utf8'),
+      cipher.final(),
+    ]);
     const authTag = cipher.getAuthTag();
     return `${iv.toString('base64')}.${authTag.toString('base64')}.${ciphertext.toString('base64')}`;
   }
@@ -42,7 +47,11 @@ export class CryptoService implements OnModuleInit {
     if (!ivB64 || !authTagB64 || !cipherB64) {
       throw new Error('Gecersiz sifreli veri formati');
     }
-    const decipher = createDecipheriv(ALGORITHM, this.key, Buffer.from(ivB64, 'base64'));
+    const decipher = createDecipheriv(
+      ALGORITHM,
+      this.key,
+      Buffer.from(ivB64, 'base64'),
+    );
     decipher.setAuthTag(Buffer.from(authTagB64, 'base64'));
     const plaintext = Buffer.concat([
       decipher.update(Buffer.from(cipherB64, 'base64')),

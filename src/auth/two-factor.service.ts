@@ -10,8 +10,8 @@ export class TwoFactorService {
     return generateSecret();
   }
 
-  async generateQrCodeDataUrl(email: string, secret: string): Promise<string> {
-    const otpauthUrl = await generateURI({ secret, label: email, issuer: ISSUER });
+  generateQrCodeDataUrl(email: string, secret: string): Promise<string> {
+    const otpauthUrl = generateURI({ secret, label: email, issuer: ISSUER });
     return QRCode.toDataURL(otpauthUrl);
   }
 

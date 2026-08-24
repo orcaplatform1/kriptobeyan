@@ -14,7 +14,8 @@ import { SecurityLogModule } from '../security-log/security-log.module';
     JwtModule.register({
       secret: process.env.JWT_SECRET,
       signOptions: {
-        expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN ?? '15m') as JwtSignOptions['expiresIn'],
+        expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN ??
+          '15m') as JwtSignOptions['expiresIn'],
       },
     }),
     AuditLogModule,

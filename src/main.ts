@@ -10,7 +10,10 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   // Sadece kriptobeyan.com'a izin veriliyor (.env: CORS_ORIGIN, virgulle ayrik).
-  const allowedOrigins = (process.env.CORS_ORIGIN ?? '').split(',').map((o) => o.trim()).filter(Boolean);
+  const allowedOrigins = (process.env.CORS_ORIGIN ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
   app.enableCors({
     origin: allowedOrigins.length > 0 ? allowedOrigins : false,
     credentials: true,

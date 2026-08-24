@@ -6,8 +6,19 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { VerifyTwoFactorDto, DisableTwoFactorDto } from './dto/two-factor.dto';
+import {
+  ResendVerificationDto,
+  VerifyEmailDto,
+} from './dto/email-verification.dto';
+import {
+  RequestPasswordResetDto,
+  ResetPasswordDto,
+} from './dto/password-reset.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { CurrentUser, AuthenticatedUser } from './decorators/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from './decorators/current-user.decorator';
 
 function requestMeta(req: Request) {
   return { ipAddress: req.ip, userAgent: req.headers['user-agent'] };
@@ -42,6 +53,37 @@ export class AuthController {
     return this.auth.logout(dto.refreshToken);
   }
 
+  @Post('verify-email')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  verifyEmail(@Body() dto: VerifyEmailDto, @Req() req: Request) {
+    return this.auth.verifyEmail(dto.token, requestMeta(req));
+  }
+
+  @Post('resend-verification')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  resendVerification(@Body() dto: ResendVerificationDto) {
+    return this.auth.resendVerificationEmail(dto.email);
+  }
+
+  @Post('request-password-reset')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  requestPasswordReset(
+    @Body() dto: RequestPasswordResetDto,
+    @Req() req: Request,
+  ) {
+    return this.auth.requestPasswordReset(dto.email, requestMeta(req));
+  }
+
+  @Post('reset-password')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  resetPassword(@Body() dto: ResetPasswordDto, @Req() req: Request) {
+    return this.auth.resetPassword(
+      dto.token,
+      dto.newPassword,
+      requestMeta(req),
+    );
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('2fa/generate')
   generateTwoFactor(@CurrentUser() user: AuthenticatedUser) {
@@ -65,6 +107,11 @@ export class AuthController {
     @Body() dto: DisableTwoFactorDto,
     @Req() req: Request,
   ) {
-    return this.auth.disableTwoFactor(user.userId, dto.password, dto.code, requestMeta(req));
+    return this.auth.disableTwoFactor(
+      user.userId,
+      dto.password,
+      dto.code,
+      requestMeta(req),
+    );
   }
 }

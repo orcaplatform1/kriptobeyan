@@ -1,6 +1,10 @@
 // KriptoBeyan — veri modeli.
-// Hassas alanlar (twoFactorSecret, ExchangeApiKey.encrypted*) uygulama
+// Hassas alanlar (twoFactorSecret, ExchangeConnection.encrypted*) uygulama
 // katmanında AES-256-GCM ile şifrelenmiş halde saklanır (bkz. src/crypto).
+//
+// NOT: TaxYearSummary/TaxLot çıktısı her zaman "taslak/tahmini" niteliğinde —
+// bu modülün hesaplama mantığı bir mali müşavirle doğrulanana kadar kesin
+// rakam gibi sunulmamalı (bkz. TaxCalculationService).
 
 generator client {
   provider     = "prisma-client"
@@ -12,12 +16,49 @@ datasource db {
   provider = "postgresql"
 }
 
+// ============================================================
+// AUTH + USER
+// ============================================================
+
+// Kullanıcı tipi — BIREYSEL yatırımcı mı, müşterileri adına giriş yapan bir
+// MUHASEBECI mi (bkz. AccountantClient, AccountantDashboard modülü). Ayrıca
+// Plan.type için de kullanılıyor (hangi plan hangi rol için satılıyor).
+enum UserRole {
+  INDIVIDUAL
+  ACCOUNTANT
+}
+
+enum TaxpayerType {
+  INDIVIDUAL // gerçek kişi — değer artış kazancı
+  BUSINESS   // ticari işletme — ticari kazanç
+}
+
+enum CostBasisMethod {
+  FIFO
+  // İleride: LIFO, AVERAGE_COST — şimdilik sadece FIFO uygulanıyor
+  // (bkz. TaxCalculationService), alan esnek bırakıldı.
+}
+
 model User {
-  id               String    @id @default(uuid())
-  email            String    @unique
-  passwordHash     String
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Kişisel bilgiler
+  fullName String?
+  phone    String?
+  role     UserRole @default(INDIVIDUAL)
+
+  // E-posta doğrulama
+  emailVerified            Boolean   @default(false)
+  emailVerificationHash    String?
+  emailVerificationExpires DateTime?
+
+  // Şifre sıfırlama
+  passwordResetHash    String?
+  passwordResetExpires DateTime?
 
   // Brute-force kilidi — art arda başarısız girişten sonra hesap geçici kilitlenir.
   failedLoginCount Int       @default(0)
@@ -27,10 +68,41 @@ model User {
   twoFactorEnabled         Boolean @default(false)
   twoFactorSecretEncrypted String?
 
-  refreshTokens   RefreshToken[]
-  exchangeApiKeys ExchangeApiKey[]
-  auditLogs       AuditLog[]
-  securityLogs    SecurityLog[]
+  // Vergi ayarları
+  baseCurrency    String          @default("TRY")
+  costBasisMethod CostBasisMethod @default(FIFO)
+  taxpayerType    TaxpayerType    @default(INDIVIDUAL)
+  timezone        String          @default("Europe/Istanbul")
+  // Şimdilik sabit "Türkiye" ama ayrı alan — çoklu ülke desteğine hazır.
+  jurisdiction    String          @default("Türkiye")
+  // Dashboard'da o an görüntülenen vergi yılı; geçmiş yıllar TaxYearSummary'de arşivli.
+  activeTaxYear   Int             @default(dbgenerated("EXTRACT(YEAR FROM CURRENT_DATE)::int"))
+
+  // Abonelik durumu (aktif plan/bitiş tarihi/limit) Subscription+Plan
+  // ilişkisinden TÜRETİLİR — burada ham alan tutulmuyor (bkz. SubscriptionService).
+
+  // Bildirim tercihleri
+  declarationReminderEnabled Boolean @default(true)
+
+  refreshTokens        RefreshToken[]
+  exchangeConnections  ExchangeConnection[]
+  walletAddresses      WalletAddress[]
+  csvImports           CsvImport[]
+  transactions         Transaction[]
+  reconciliationFlags  ReconciliationFlag[]
+  taxLots              TaxLot[]
+  taxYearSummaries     TaxYearSummary[]
+  generatedReports     GeneratedReport[]
+  notifications        NotificationLog[]
+  subscriptions        Subscription[]
+  payments             Payment[]
+  auditLogs            AuditLog[]
+  securityLogs         SecurityLog[]
+
+  // Muhasebeci ise: davet ettiği müşteriler. Bireysel kullanıcıysa: kendisini
+  // müşteri olarak ekleyen muhasebeci ilişkisi (genelde en fazla 1 kayıt).
+  accountantOfClients AccountantClient[] @relation("AccountantOf")
+  clientOfAccountant  AccountantClient[] @relation("ClientOf")
 
   @@map("users")
 }
@@ -52,24 +124,495 @@ model RefreshToken {
   @@map("refresh_tokens")
 }
 
-model ExchangeApiKey {
-  id                  String    @id @default(uuid())
-  userId              String
-  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  exchange            String    // ör. "binance", "bybit"
-  label               String
+enum AccountantClientStatus {
+  PENDING // davet gönderildi, müşteri henüz kabul etmedi
+  ACTIVE  // müşteri hesabını oluşturup daveti kabul etti
+  REMOVED // muhasebeci tarafından çıkarıldı / slot boşaltıldı
+}
+
+// Bir muhasebecinin hangi bireysel kullanıcılara (müşterilerine) erişimi
+// olduğunu tutar. Muhasebeci ASLA müşterinin borsa API key'lerini görmez/
+// girmez — sadece bu ilişki üzerinden hesaplanmış rapor/özet verisine
+// (TaxYearSummary, ReconciliationFlag vb.) salt-okunur erişir (bkz.
+// AccountantService — her erişimde bu tablo üzerinden yetki kontrolü yapılır).
+model AccountantClient {
+  id               String                 @id @default(uuid())
+  accountantUserId String
+  accountant       User                   @relation("AccountantOf", fields: [accountantUserId], references: [id], onDelete: Cascade)
+  // Davet kabul edilene kadar null — kullanıcı henüz kayıt olmamış olabilir.
+  clientUserId     String?
+  client           User?                  @relation("ClientOf", fields: [clientUserId], references: [id], onDelete: Cascade)
+  inviteEmail      String
+  inviteTokenHash  String?
+  inviteExpiresAt  DateTime?
+  status           AccountantClientStatus @default(PENDING)
+  invitedAt        DateTime               @default(now())
+  acceptedAt       DateTime?
+  removedAt        DateTime?
+
+  @@index([accountantUserId])
+  @@index([clientUserId])
+  @@map("accountant_clients")
+}
+
+// ============================================================
+// EXCHANGE INTEGRATION
+// ============================================================
+
+// Turkiye top8 (API sunan) + global tier-1 top10 (API sunan), cakisanlar
+// (BINANCE/BYBIT/OKX) tek sefer sayilir. GERCEK/STUB durumu icin ilgili
+// adapter dosyasindaki yorumlara bakin (adapters/*.adapter.ts).
+enum ExchangeProvider {
+  // --- Turkiye ---
+  BINANCE
+  BTCTURK
+  PARIBU
+  BITEXEN
+  ICRYPEX
+  BITCI
+  // --- Global tier-1 (Turkiye'de de kullanilanlar dahil) ---
+  BYBIT
+  OKX
+  COINBASE
+  KRAKEN
+  KUCOIN
+  GATEIO
+  BITGET
+  HTX
+  MEXC
+  CRYPTOCOM
+}
+
+enum ApiPermissionLevel {
+  UNKNOWN     // henüz borsa üzerinden doğrulanmadı
+  READ_ONLY   // doğrulandı, sadece okuma izni var
+  TRADE       // işlem izni de var — istenmiyor ama tespit edildi
+  WITHDRAW    // para çekme izni var — KRİTİK, kullanıcı uyarılmalı
+}
+
+enum SyncStatus {
+  NEVER_SYNCED
+  SYNCING
+  SYNCED
+  ERROR
+}
+
+model ExchangeConnection {
+  id       String           @id @default(uuid())
+  userId   String
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider ExchangeProvider
+  label    String
+
   // AES-256-GCM ile şifreli, format: "<iv>.<authTag>.<ciphertext>" (base64).
-  encryptedApiKey     String
-  encryptedApiSecret  String
+  encryptedApiKey        String
+  encryptedApiSecret     String
+  encryptedPassphrase    String? // OKX gibi bazı borsalar passphrase de ister
+
   // Kullanıcı, borsada bu key'e SADECE read-only izin verdiğini onayladı mı?
   confirmedReadOnly   Boolean   @default(false)
   confirmedReadOnlyAt DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  // Borsa API'si üzerinden gerçekten doğrulanan izin seviyesi (bkz. adapter.getPermissionLevel).
+  verifiedPermissionLevel ApiPermissionLevel @default(UNKNOWN)
+  verifiedAt              DateTime?
+
+  syncStatus   SyncStatus @default(NEVER_SYNCED)
+  lastSyncedAt DateTime?
+  lastSyncError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions Transaction[]
 
   @@index([userId])
-  @@map("exchange_api_keys")
+  @@map("exchange_connections")
 }
+
+enum WalletChain {
+  ETHEREUM
+  BSC
+  BITCOIN
+}
+
+model WalletAddress {
+  id           String      @id @default(uuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chain        WalletChain
+  address      String
+  label        String?
+  syncStatus   SyncStatus  @default(NEVER_SYNCED)
+  lastSyncedAt DateTime?
+  lastSyncError String?
+  createdAt    DateTime    @default(now())
+
+  transactions Transaction[]
+
+  @@unique([userId, chain, address])
+  @@index([userId])
+  @@map("wallet_addresses")
+}
+
+enum CsvImportStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+model CsvImport {
+  id            String          @id @default(uuid())
+  userId        String
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exchangeName  String          // API'si olmayan/desteklenmeyen platform adı (serbest metin)
+  fileName      String
+  rowCount      Int             @default(0)
+  importedCount Int             @default(0)
+  status        CsvImportStatus @default(PENDING)
+  errorMessage  String?
+  createdAt     DateTime        @default(now())
+
+  transactions Transaction[]
+
+  @@index([userId])
+  @@map("csv_imports")
+}
+
+// ============================================================
+// TRANSACTION AGGREGATION
+// ============================================================
+
+enum TransactionSource {
+  EXCHANGE_API
+  WALLET
+  CSV
+}
+
+enum TransactionType {
+  BUY
+  SELL
+  DEPOSIT
+  WITHDRAWAL
+  TRANSFER_IN
+  TRANSFER_OUT
+  STAKING_REWARD
+  AIRDROP
+  MINING_REWARD
+  FEE
+  SWAP
+}
+
+// Normalize edilmiş, tek tip işlem kaydı — borsa API'si, cüzdan veya CSV
+// hangi kaynaktan gelirse gelsin bu formata dönüşür (bkz. TransactionAggregationService).
+model Transaction {
+  id     String            @id @default(uuid())
+  userId String
+  user   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source TransactionSource
+
+  exchangeConnectionId String?
+  exchangeConnection   ExchangeConnection? @relation(fields: [exchangeConnectionId], references: [id], onDelete: SetNull)
+  walletAddressId       String?
+  walletAddress          WalletAddress?      @relation(fields: [walletAddressId], references: [id], onDelete: SetNull)
+  csvImportId            String?
+  csvImport              CsvImport?          @relation(fields: [csvImportId], references: [id], onDelete: SetNull)
+
+  // Kaynaktaki orijinal işlem id'si — reconciliation/duplicate tespiti icin.
+  externalId String?
+
+  type           TransactionType
+  asset          String   // ör. "BTC"
+  quantity       Decimal  @db.Decimal(38, 18)
+  priceInQuote   Decimal? @db.Decimal(38, 18)
+  quoteCurrency  String?  // ör. "USDT", "TRY"
+  feeAmount      Decimal? @db.Decimal(38, 18)
+  feeAsset       String?
+  timestamp      DateTime
+  taxYear        Int
+
+  // Kullanıcının kendi hesapları arasındaki transfer mi? true ise vergiye
+  // tabi olay SAYILMAZ (bkz. TransferDetectionService — bu tespit yapılmadan
+  // hatalı/şişirilmiş kâr çıkar, en öncelikli mantık burası).
+  isInternalTransfer Boolean @default(false)
+
+  // Spam/scam token filtrelemesi (bkz. SpamFilterService).
+  isSpamFiltered Boolean @default(false)
+
+  rawData Json? // orijinal payload, audit icin
+
+  createdAt DateTime @default(now())
+
+  taxLotsCreated  TaxLot[] @relation("AcquisitionTransaction")
+  reconciliationFlags ReconciliationFlag[]
+
+  @@unique([userId, source, externalId], name: "uniqueExternalTx")
+  @@index([userId, taxYear])
+  @@index([userId, asset])
+  @@map("transactions")
+}
+
+enum ReconciliationFlagType {
+  NEGATIVE_BALANCE
+  MISSING_DATA
+  DUPLICATE_SUSPECTED
+}
+
+model ReconciliationFlag {
+  id            String                  @id @default(uuid())
+  userId        String
+  user          User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactionId String?
+  transaction   Transaction?            @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  type          ReconciliationFlagType
+  description   String
+  resolved      Boolean                 @default(false)
+  createdAt     DateTime                @default(now())
+
+  @@index([userId])
+  @@map("reconciliation_flags")
+}
+
+// ============================================================
+// PRICE DATA
+// ============================================================
+
+enum PriceSource {
+  COINGECKO
+  TCMB
+}
+
+// Gunluk granulerlikte fiyat/kur cache'i — CoinGecko (coin/USD veya coin/TRY)
+// ve TCMB (USD/TRY resmi kur) ayni tabloda, source alaniyla ayirt ediliyor.
+model PriceCache {
+  id            String      @id @default(uuid())
+  asset         String      // ör. "BTC" veya "USD" (TCMB kuru için)
+  quoteCurrency String      // ör. "USD", "TRY"
+  date          DateTime    @db.Date
+  price         Decimal     @db.Decimal(38, 18)
+  source        PriceSource
+  fetchedAt     DateTime    @default(now())
+
+  @@unique([asset, quoteCurrency, date])
+  @@map("price_cache")
+}
+
+// ============================================================
+// TAX CALCULATION ENGINE
+// ============================================================
+
+// FIFO maliyet takibi icin "lot" — her alis islemi bir lot yaratir, satislar
+// en eski lottan baslayarak tuketir (bkz. TaxCalculationService.calculateFifo).
+model TaxLot {
+  id                     String   @id @default(uuid())
+  userId                 String
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  asset                  String
+  originalQuantity       Decimal  @db.Decimal(38, 18)
+  remainingQuantity      Decimal  @db.Decimal(38, 18)
+  costBasisPerUnitTRY    Decimal  @db.Decimal(38, 18)
+  acquisitionDate        DateTime
+  acquisitionTransactionId String
+  acquisitionTransaction   Transaction @relation("AcquisitionTransaction", fields: [acquisitionTransactionId], references: [id])
+  taxYear                Int
+  fullyConsumed           Boolean  @default(false)
+  createdAt               DateTime @default(now())
+
+  @@index([userId, asset])
+  @@index([userId, taxYear])
+  @@map("tax_lots")
+}
+
+// Yil bazinda hesaplanmis vergi ozeti — HER ZAMAN taslak/tahmini (isDraft
+// alani UI'da acikca gosterilmeli, kesin rakam gibi sunulmamali).
+model TaxYearSummary {
+  id                     String   @id @default(uuid())
+  userId                 String
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taxYear                Int
+
+  totalRealizedGainTRY   Decimal  @db.Decimal(38, 18) @default(0)
+  totalRealizedLossTRY   Decimal  @db.Decimal(38, 18) @default(0)
+  netCapitalGainTRY      Decimal  @db.Decimal(38, 18) @default(0)
+
+  // Staking/airdrop/mining — "arızi kazanç", ayrı istisna tutarına tabi.
+  occasionalIncomeTRY    Decimal  @db.Decimal(38, 18) @default(0)
+
+  capitalGainsExemptionUsedTRY Decimal @db.Decimal(38, 18) @default(0)
+  occasionalIncomeExemptionUsedTRY Decimal @db.Decimal(38, 18) @default(0)
+  estimatedTaxableAmountTRY    Decimal @db.Decimal(38, 18) @default(0)
+
+  isDraft     Boolean  @default(true)
+  calculatedAt DateTime @default(now())
+
+  @@unique([userId, taxYear])
+  @@map("tax_year_summaries")
+}
+
+// Yıldan yıla değişen istisna tutarları — admin tarafından yönetilir,
+// hesaplama koduna hardcode edilmez.
+model TaxExemptionConfig {
+  id                          String   @id @default(uuid())
+  taxYear                     Int      @unique
+  capitalGainsExemptionTRY    Decimal  @db.Decimal(38, 18)
+  occasionalIncomeExemptionTRY Decimal @db.Decimal(38, 18)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  @@map("tax_exemption_configs")
+}
+
+// ============================================================
+// SPAM / SCAM TOKEN FİLTRELEME
+// ============================================================
+
+model SpamToken {
+  id      String   @id @default(uuid())
+  asset   String   // sembol veya contract adresi
+  chain   String?
+  reason  String?
+  source  String   // ör. "coingecko", "manual"
+  addedAt DateTime @default(now())
+
+  @@unique([asset, chain])
+  @@map("spam_tokens")
+}
+
+// ============================================================
+// REPORT GENERATION
+// ============================================================
+
+enum ReportFormat {
+  PDF
+  EXCEL
+}
+
+model GeneratedReport {
+  id          String       @id @default(uuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taxYear     Int
+  format      ReportFormat
+  filePath    String
+  // Mali müşavir paylaşım modu — link veya e-posta ile.
+  shareToken  String?      @unique
+  sharedWithEmail String?
+  createdAt   DateTime     @default(now())
+  expiresAt   DateTime?
+
+  @@index([userId])
+  @@map("generated_reports")
+}
+
+// ============================================================
+// BİLDİRİM
+// ============================================================
+
+enum NotificationType {
+  DECLARATION_REMINDER
+  DATA_ISSUE
+  // Muhasebeciye: musterisi yeni veri ekledi / davet kabul etti / rapor tamamladi.
+  ACCOUNTANT_CLIENT_ACTIVITY
+}
+
+model NotificationLog {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  message   String
+  sentAt    DateTime         @default(now())
+  readAt    DateTime?
+
+  @@index([userId])
+  @@map("notification_logs")
+}
+
+// ============================================================
+// PAYMENT
+// ============================================================
+
+// Plan fiyat/limitleri hardcoded DEĞİL — bu tablo üzerinden yönetilir (manage
+// panelinde admin ekranı, bkz. AdminPlansController). Başlangıç verisi
+// (FREE/STARTER/.../ACCOUNTANT_100) prisma/seed.ts ile yükleniyor.
+model Plan {
+  id               String   @id @default(uuid())
+  name             String   @unique // ör. "FREE", "STARTER", "ACCOUNTANT_10"
+  type             UserRole // INDIVIDUAL veya ACCOUNTANT plani
+  priceTRY         Decimal  @db.Decimal(10, 2)
+  // Bireysel planlar icin islem limiti (null = sinirsiz), muhasebeci
+  // planlari icin musteri slotu limiti — tip'e gore sadece biri kullanilir.
+  transactionLimit Int?
+  clientLimit      Int?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  subscriptions Subscription[]
+  payments      Payment[]
+
+  @@map("plans")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+model Subscription {
+  id        String             @id @default(uuid())
+  userId    String
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId    String
+  plan      Plan               @relation(fields: [planId], references: [id])
+  status    SubscriptionStatus @default(ACTIVE)
+  startDate DateTime           @default(now())
+  endDate   DateTime
+  // Yillik otomatik yenileme opsiyonel (zorunlu degil, bkz. istek).
+  autoRenew Boolean            @default(false)
+  createdAt DateTime           @default(now())
+
+  payments Payment[]
+
+  @@index([userId])
+  @@map("subscriptions")
+}
+
+enum PaymentMethod {
+  CARD
+  CRYPTO
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model Payment {
+  id             String        @id @default(uuid())
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Odeme onaylanip Subscription olusturulunca doldurulur; oncesinde hangi
+  // plan icin odeme yapildigini bilmek icin planId ayrica tutuluyor.
+  planId         String
+  plan           Plan          @relation(fields: [planId], references: [id])
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+  amount         Decimal       @db.Decimal(10, 2)
+  currency       String        @default("TRY")
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  providerRef    String?
+  createdAt      DateTime      @default(now())
+
+  @@index([userId])
+  @@map("payments")
+}
+
+// ============================================================
+// AUDIT / SECURITY LOG
+// ============================================================
 
 // Kim, ne zaman, neyi değiştirdi/erişti — normal uygulama olayları.
 model AuditLog {
@@ -97,6 +640,9 @@ enum SecurityEventType {
   TWO_FA_SUCCESS
   REFRESH_TOKEN_REUSE_DETECTED
   SUSPICIOUS_ACTIVITY
+  EMAIL_VERIFIED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
 }
 
 // Başarısız girişler, şüpheli aktivite — güvenlik odaklı, audit log'dan ayrı.
