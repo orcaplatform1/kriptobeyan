@@ -18,22 +18,74 @@ export class SubscriptionService {
   }
 
   /**
-   * Bireysel kullanicilar icin bu yilki islem sayisi plan limitini asiyor mu.
-   * Aktif abonelik yoksa FREE plan (transactionLimit=0) varsayilir — hicbir
-   * rapor/limitli islem yapilamaz, sadece goruntuleme.
+   * "Ücretsiz" plan (priceTRY=0) kaydinin transactionLimit'i - hicbir aktif
+   * aboneligi olmayan kullanicilarin HESAPLAMA (goruntuleme) icin serbest
+   * sinirini belirler (Koinly modeli: import sinirsiz, hesaplama N iesleme
+   * kadar ucretsiz). Admin panelden ("Ücretsiz" plani duzenleyerek) kod
+   * degisikligi gerekmeden ayarlanabilir.
+   */
+  private async getFreeCalculationLimit(): Promise<number> {
+    const freePlan = await this.prisma.plan.findFirst({
+      where: { type: UserRole.INDIVIDUAL, priceTRY: 0, isActive: true },
+    });
+    return freePlan?.transactionLimit ?? 0;
+  }
+
+  /**
+   * Bir vergi yili icin kullanicinin islem sayisi HESAPLAMA (tax-calculation)
+   * icin izinli sinirin altinda mi. Aktif (odenmis) abonelik varsa o planin
+   * transactionLimit'i gecerli; yoksa "Ücretsiz" planin serbest goruntuleme
+   * siniri (bkz. getFreeCalculationLimit) kullanilir.
    */
   async checkTransactionLimit(
     userId: string,
-  ): Promise<{ allowed: boolean; used: number; limit: number | null }> {
+    taxYear: number,
+  ): Promise<{ allowed: boolean; used: number; limit: number | null; hasActivePlan: boolean }> {
     const sub = await this.getActiveSubscription(userId);
-    const limit = sub?.plan.transactionLimit ?? 0;
-    if (limit === null) return { allowed: true, used: 0, limit: null }; // sinirsiz (TRADER)
-
-    const currentYear = new Date().getUTCFullYear();
+    const limit = sub ? sub.plan.transactionLimit : await this.getFreeCalculationLimit();
     const used = await this.prisma.transaction.count({
-      where: { userId, taxYear: currentYear },
+      where: { userId, taxYear },
     });
-    return { allowed: used < limit, used, limit };
+    if (limit === null) return { allowed: true, used, limit: null, hasActivePlan: !!sub }; // sinirsiz (TRADER)
+    return { allowed: used <= limit, used, limit, hasActivePlan: !!sub };
+  }
+
+  /**
+   * Rapor (PDF/Excel) URETIMI/indirme her zaman AKTIF (odenmis) bir abonelik
+   * gerektirir - "Ücretsiz" planin hesaplama-goruntuleme serbestligi rapor
+   * icin GECERLI DEGIL (CoinTracker modeli: import serbest ama rapor
+   * kilitli). Aktif abonelik varsa da o planin transactionLimit'ini asan
+   * yillar icin yine engellenir - kullanici islem sayisina uygun plana
+   * yukseltmeli.
+   */
+  async checkReportAccess(
+    userId: string,
+    taxYear: number,
+  ): Promise<{ allowed: boolean; used: number; limit: number | null; hasActivePlan: boolean }> {
+    const sub = await this.getActiveSubscription(userId);
+    const used = await this.prisma.transaction.count({
+      where: { userId, taxYear },
+    });
+    if (!sub) return { allowed: false, used, limit: 0, hasActivePlan: false };
+    const limit = sub.plan.transactionLimit;
+    if (limit === null) return { allowed: true, used, limit: null, hasActivePlan: true };
+    return { allowed: used <= limit, used, limit, hasActivePlan: true };
+  }
+
+  /**
+   * Verilen islem sayisina yetecek EN UCUZ ucretli plani onerir (limitine
+   * uygun plana yonlendirme icin - kullanici istegi 2026-08-25: "nasilsa
+   * indirmek icin kendine uygun plan alacak, kendine uygun plana
+   * yonlendir"). Hicbir plan yetmiyorsa (islem sayisi en buyuk planin
+   * sinirini da asiyorsa) en buyuk plan onerilir.
+   */
+  async recommendPlan(txCount: number, type: UserRole = UserRole.INDIVIDUAL) {
+    const plans = await this.prisma.plan.findMany({
+      where: { isActive: true, type, priceTRY: { gt: 0 } },
+      orderBy: { priceTRY: 'asc' },
+    });
+    const fit = plans.find((p) => p.transactionLimit === null || p.transactionLimit >= txCount);
+    return fit ?? plans[plans.length - 1] ?? null;
   }
 
   /** Muhasebeci icin aktif musteri slotu kullanimi. */
@@ -74,7 +126,7 @@ export class SubscriptionService {
         clients: slot,
       };
     }
-    const tx = await this.checkTransactionLimit(userId);
+    const tx = await this.checkTransactionLimit(userId, new Date().getUTCFullYear());
     return {
       planName: sub?.plan.name ?? null,
       endDate: sub?.endDate ?? null,

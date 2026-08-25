@@ -3,9 +3,10 @@ import { TaxCalculationService } from './tax-calculation.service';
 import { TaxCalculationController } from './tax-calculation.controller';
 import { PriceDataModule } from '../price-data/price-data.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { SubscriptionModule } from '../subscription/subscription.module';
 
 @Module({
-  imports: [PriceDataModule, NotificationsModule],
+  imports: [PriceDataModule, NotificationsModule, SubscriptionModule],
   controllers: [TaxCalculationController],
   providers: [TaxCalculationService],
   exports: [TaxCalculationService],
