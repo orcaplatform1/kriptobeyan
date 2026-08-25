@@ -97,13 +97,34 @@ export class AdminUsersService {
     });
     if (!user) throw new NotFoundException('Kullanıcı bulunamadı');
 
-    const subscription = await this.prisma.subscription.findFirst({
-      where: { userId, status: 'ACTIVE', endDate: { gt: new Date() } },
-      include: { plan: true },
-      orderBy: { endDate: 'desc' },
-    });
+    const [subscription, reports, invite] = await Promise.all([
+      this.prisma.subscription.findFirst({
+        where: { userId, status: 'ACTIVE', endDate: { gt: new Date() } },
+        include: { plan: true },
+        orderBy: { endDate: 'desc' },
+      }),
+      this.prisma.generatedReport.findMany({
+        where: { userId },
+        select: { id: true, taxYear: true, format: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+      // Bu kullanicinin bir mali musavir daveti uzerinden bagli olup
+      // olmadigi — SADECE ADMIN gorur (kullanici istegi 2026-08-25: "bunu
+      // yalnizca admin gorsun"). Musavir-tarafinda (accountant.service.ts)
+      // ve kullanicinin kendi profilinde (user.controller.ts) bu bilgi
+      // KESINLIKLE donmemeli.
+      this.prisma.accountantClient.findFirst({
+        where: { clientUserId: userId, status: 'ACTIVE' },
+        select: { accountant: { select: { username: true } } },
+      }),
+    ]);
 
-    return { ...user, activeSubscription: subscription };
+    return {
+      ...user,
+      activeSubscription: subscription,
+      reports,
+      invitedByAccountant: invite?.accountant ?? null,
+    };
   }
 
   async update(

@@ -230,7 +230,7 @@ export class AccountantService {
   async getClientSummary(accountantUserId: string, clientUserId: string) {
     await this.assertAccess(accountantUserId, clientUserId);
 
-    const [summaries, flags, client] = await Promise.all([
+    const [summaries, flags, client, reports] = await Promise.all([
       this.prisma.taxYearSummary.findMany({
         where: { userId: clientUserId },
         orderBy: { taxYear: 'desc' },
@@ -248,8 +248,17 @@ export class AccountantService {
           taxpayerType: true,
         },
       }),
+      // Sadece METADATA (yil/format/tarih) - dosyanin kendisi degil. Musteri
+      // acikca "paylas" demeden musavir dosyayi indiremez (bkz. dosya
+      // basindaki KVKK yorumu, cift tarafli onay ilkesi); bu sadece
+      // musterinin rapor uretip uretmedigini gormesini saglar.
+      this.prisma.generatedReport.findMany({
+        where: { userId: clientUserId },
+        select: { id: true, taxYear: true, format: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      }),
     ]);
-    return { client, summaries, unresolvedFlags: flags };
+    return { client, summaries, unresolvedFlags: flags, reports };
   }
 
   async removeClient(

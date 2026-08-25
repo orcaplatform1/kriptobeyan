@@ -115,6 +115,21 @@ export class ReportsService {
     });
   }
 
+  /** Admin paneli — "rapor indiren kullanıcılar" listesi (kullanıcı adı + tarih). */
+  listAllForAdmin() {
+    return this.prisma.generatedReport.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: {
+        id: true,
+        taxYear: true,
+        format: true,
+        createdAt: true,
+        user: { select: { id: true, username: true, email: true, fullName: true } },
+      },
+    });
+  }
+
   async getOwnedFile(userId: string, reportId: string) {
     const report = await this.prisma.generatedReport.findUnique({
       where: { id: reportId },
