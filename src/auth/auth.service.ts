@@ -316,6 +316,40 @@ export class AuthService {
     });
   }
 
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    meta: RequestMeta,
+  ): Promise<void> {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+    });
+    const passwordValid = await argon2.verify(
+      user.passwordHash,
+      currentPassword,
+    );
+    if (!passwordValid) {
+      throw new UnauthorizedException('Mevcut şifre yanlış');
+    }
+    const passwordHash = await argon2.hash(newPassword);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
+    });
+    // Sifre degistiginde diger cihazlardaki oturumlar iptal edilir, mevcut oturum access token'i suresi dolana kadar gecerli kalir.
+    await this.prisma.refreshToken.updateMany({
+      where: { userId: user.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    await this.securityLog.log({
+      userId: user.id,
+      eventType: 'PASSWORD_CHANGED',
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+    });
+  }
+
   private async sendVerificationEmail(
     email: string,
     token: string,

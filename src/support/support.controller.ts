@@ -30,7 +30,12 @@ export class SupportController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateTicketDto,
   ) {
-    return this.service.createTicket(user.userId, dto.subject, dto.body);
+    return this.service.createTicket(
+      user.userId,
+      dto.category,
+      dto.subject,
+      dto.body,
+    );
   }
 
   @Get()

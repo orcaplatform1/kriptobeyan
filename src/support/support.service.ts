@@ -1,6 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { SupportTicketStatus } from '../../generated/prisma/client';
+import {
+  SupportTicketCategory,
+  SupportTicketStatus,
+} from '../../generated/prisma/client';
 
 const TICKET_INCLUDE = {
   messages: { orderBy: { createdAt: 'asc' as const } },
@@ -10,11 +13,17 @@ const TICKET_INCLUDE = {
 export class SupportService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async createTicket(userId: string, subject: string, body: string) {
+  async createTicket(
+    userId: string,
+    category: SupportTicketCategory,
+    subject: string,
+    body: string,
+  ) {
     return this.prisma.supportTicket.create({
       data: {
         userId,
         subject,
+        category,
         messages: {
           create: { senderUserId: userId, isFromStaff: false, body },
         },

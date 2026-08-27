@@ -14,6 +14,7 @@ import { VerifyPhoneDto } from './dto/phone-verification.dto';
 import {
   RequestPasswordResetDto,
   ResetPasswordDto,
+  ChangePasswordDto,
 } from './dto/password-reset.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import {
@@ -98,6 +99,22 @@ export class AuthController {
   resetPassword(@Body() dto: ResetPasswordDto, @Req() req: Request) {
     return this.auth.resetPassword(
       dto.token,
+      dto.newPassword,
+      requestMeta(req),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  changePassword(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ChangePasswordDto,
+    @Req() req: Request,
+  ) {
+    return this.auth.changePassword(
+      user.userId,
+      dto.currentPassword,
       dto.newPassword,
       requestMeta(req),
     );
